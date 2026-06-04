@@ -23,8 +23,11 @@ const ui = {
   objectSearch: document.getElementById("objectSearch"),
   filterButtons: Array.from(document.querySelectorAll(".filter-button")),
   runtimeDebugButtons: Array.from(document.querySelectorAll(".debug-button")),
+  togglePlayer: document.getElementById("togglePlayer"),
   nextTeleport: document.getElementById("nextTeleport"),
   runtimeStatus: document.getElementById("runtimeStatus"),
+  playerPosition: document.getElementById("playerPosition"),
+  interactionStatus: document.getElementById("interactionStatus"),
   resetView: document.getElementById("resetView"),
   toggleWire: document.getElementById("toggleWire"),
   toggleCull: document.getElementById("toggleCull"),
@@ -51,6 +54,19 @@ const state = {
   runtime: null,
   loopRotations: [],
   transformAnimations: [],
+  player: {
+    enabled: false,
+    position: [0, 1.7, 0],
+    velocityY: 0,
+    yaw: 0,
+    pitch: 0,
+    height: 1.7,
+    radius: 0.28,
+    speed: 6.5,
+    grounded: false,
+  },
+  keys: new Set(),
+  lastFrameTime: performance.now() * 0.001,
   metadataByPath: new Map(),
   runtimeDebug: {
     colliders: false,
@@ -76,6 +92,7 @@ const state = {
   specularStrength: 0.55,
   normalStrength: 0.8,
   dragging: false,
+  pointerLook: false,
   lastX: 0,
   lastY: 0,
   lighting: defaultLighting(),
@@ -262,6 +279,7 @@ async function init() {
   await Promise.all(workers);
   fitCameraFromScene();
   focusPlayerSpawn();
+  resetPlayerToSpawn();
 }
 
 function populateObjectList(items) {
@@ -638,6 +656,14 @@ function jumpToNextTeleport() {
   }
   const target = teleports[state.teleportIndex % teleports.length];
   state.teleportIndex += 1;
+  if (state.player.enabled) {
+    state.player.position = [target.position[0], target.position[1] + state.player.height * 0.5, target.position[2]];
+    state.player.velocityY = 0;
+    snapPlayerToGround(state.player.position);
+    updatePlayerReadout();
+    if (ui.runtimeStatus) ui.runtimeStatus.textContent = `teleport ${state.teleportIndex}/${teleports.length}`;
+    return;
+  }
   state.target = [...target.position];
   state.distance = clamp(Math.max(target.radius * 6, 16), 8, 120);
   state.pitch = clamp(state.pitch, -0.15, 0.75);
@@ -658,6 +684,25 @@ function focusPlayerSpawn() {
   const yawDegrees = Array.isArray(spawn.rotationEuler) ? Number(spawn.rotationEuler[1]) || 0 : 0;
   state.yaw = (yawDegrees * Math.PI / 180) - 0.45;
   if (ui.runtimeStatus) ui.runtimeStatus.textContent = `spawn: ${spawn.name || spawn.source || "player"}`;
+}
+
+function resetPlayerToSpawn() {
+  const spawn = state.runtime?.player?.spawn;
+  const rig = state.runtime?.player?.rig || state.runtime?.navigation?.defaultRig || {};
+  const position = Array.isArray(spawn?.position) ? spawn.position : [0, 1.7, 0];
+  state.player.height = Number(rig.height) || 1.7;
+  state.player.radius = Number(rig.radius) || 0.28;
+  state.player.position = [
+    Number(position[0]) || 0,
+    (Number(position[1]) || 0) + state.player.height * 0.5,
+    Number(position[2]) || 0,
+  ];
+  state.player.velocityY = 0;
+  state.player.grounded = false;
+  const yawDegrees = Array.isArray(spawn?.rotationEuler) ? Number(spawn.rotationEuler[1]) || 0 : 0;
+  state.player.yaw = yawDegrees * Math.PI / 180;
+  state.player.pitch = 0;
+  updatePlayerReadout();
 }
 
 function runtimeSpawnMarker() {
@@ -695,6 +740,160 @@ function runtimeBoundsRadius(bounds) {
   );
 }
 
+function togglePlayerMode() {
+  state.player.enabled = !state.player.enabled;
+  if (state.player.enabled) {
+    resetPlayerToSpawn();
+    if (ui.runtimeStatus) ui.runtimeStatus.textContent = "player mode";
+  } else if (ui.runtimeStatus) {
+    ui.runtimeStatus.textContent = "orbit mode";
+  }
+  if (ui.togglePlayer) ui.togglePlayer.classList.toggle("is-active", state.player.enabled);
+  updatePlayerReadout();
+}
+
+function currentCamera() {
+  if (!state.player.enabled) {
+    const eye = orbitEye();
+    return { eye, target: state.target };
+  }
+
+  const eye = playerEye();
+  const forward = playerForward();
+  return {
+    eye,
+    target: [eye[0] + forward[0], eye[1] + forward[1], eye[2] + forward[2]],
+  };
+}
+
+function playerEye() {
+  return [
+    state.player.position[0],
+    state.player.position[1] + state.player.height * 0.42,
+    state.player.position[2],
+  ];
+}
+
+function playerForward() {
+  const cp = Math.cos(state.player.pitch);
+  return [
+    Math.sin(state.player.yaw) * cp,
+    Math.sin(state.player.pitch),
+    Math.cos(state.player.yaw) * cp,
+  ];
+}
+
+function updatePlayer(dt) {
+  if (!state.player.enabled) return;
+
+  const forward = [Math.sin(state.player.yaw), 0, Math.cos(state.player.yaw)];
+  const right = [Math.cos(state.player.yaw), 0, -Math.sin(state.player.yaw)];
+  let moveX = 0;
+  let moveZ = 0;
+  if (state.keys.has("KeyW") || state.keys.has("ArrowUp")) { moveX += forward[0]; moveZ += forward[2]; }
+  if (state.keys.has("KeyS") || state.keys.has("ArrowDown")) { moveX -= forward[0]; moveZ -= forward[2]; }
+  if (state.keys.has("KeyD") || state.keys.has("ArrowRight")) { moveX += right[0]; moveZ += right[2]; }
+  if (state.keys.has("KeyA") || state.keys.has("ArrowLeft")) { moveX -= right[0]; moveZ -= right[2]; }
+  const len = Math.hypot(moveX, moveZ) || 1;
+  moveX = moveX / len * state.player.speed * dt;
+  moveZ = moveZ / len * state.player.speed * dt;
+
+  if (state.keys.has("Space") && state.player.grounded) {
+    state.player.velocityY = 5.2;
+    state.player.grounded = false;
+  }
+  state.player.velocityY -= 9.81 * dt;
+  const next = [...state.player.position];
+  movePlayerAxis(next, 0, moveX);
+  movePlayerAxis(next, 2, moveZ);
+  movePlayerAxis(next, 1, state.player.velocityY * dt);
+  snapPlayerToGround(next);
+  state.player.position = next;
+  updateInteractions();
+  updatePlayerReadout();
+}
+
+function movePlayerAxis(position, axis, delta) {
+  if (Math.abs(delta) < 0.000001) return;
+  position[axis] += delta;
+  const hit = playerCollision(position);
+  if (hit) {
+    position[axis] -= delta;
+    if (axis === 1 && delta < 0) {
+      state.player.velocityY = 0;
+      state.player.grounded = true;
+    }
+  }
+}
+
+function snapPlayerToGround(position) {
+  let bestY = -Infinity;
+  const feetY = position[1] - state.player.height * 0.5;
+  for (const item of state.runtime?.physics?.colliders || []) {
+    const b = item.bounds;
+    if (!b?.min || !b?.max) continue;
+    if (!circleOverlapsAabb(position[0], position[2], state.player.radius, b.min[0], b.max[0], b.min[2], b.max[2])) continue;
+    if (b.max[1] <= feetY + 0.28 && b.max[1] > bestY) bestY = b.max[1];
+  }
+  if (Number.isFinite(bestY) && feetY - bestY < 0.28 && feetY - bestY > -0.08) {
+    position[1] = bestY + state.player.height * 0.5;
+    state.player.velocityY = 0;
+    state.player.grounded = true;
+  } else {
+    state.player.grounded = false;
+  }
+}
+
+function playerCollision(position) {
+  const minY = position[1] - state.player.height * 0.5;
+  const maxY = position[1] + state.player.height * 0.5;
+  for (const item of state.runtime?.physics?.colliders || []) {
+    const b = item.bounds;
+    if (!b?.min || !b?.max) continue;
+    if (maxY <= b.min[1] || minY >= b.max[1]) continue;
+    if (circleOverlapsAabb(position[0], position[2], state.player.radius, b.min[0], b.max[0], b.min[2], b.max[2])) {
+      return item;
+    }
+  }
+  return null;
+}
+
+function circleOverlapsAabb(x, z, radius, minX, maxX, minZ, maxZ) {
+  const cx = clamp(x, minX, maxX);
+  const cz = clamp(z, minZ, maxZ);
+  return (x - cx) * (x - cx) + (z - cz) * (z - cz) <= radius * radius;
+}
+
+function updateInteractions() {
+  const labels = [];
+  for (const item of state.runtime?.interactions?.triggers || []) {
+    if (playerOverlapsBounds(item.bounds)) labels.push(`trigger: ${item.name}`);
+  }
+  for (const item of state.runtime?.interactions?.collectibles || []) {
+    if (playerOverlapsBounds(item.bounds)) labels.push(`collect: ${item.name}`);
+  }
+  if (ui.interactionStatus) ui.interactionStatus.textContent = labels[0] || "no interaction";
+}
+
+function playerOverlapsBounds(bounds) {
+  if (!bounds?.min || !bounds?.max) return false;
+  const p = state.player.position;
+  const minY = p[1] - state.player.height * 0.5;
+  const maxY = p[1] + state.player.height * 0.5;
+  if (maxY < bounds.min[1] || minY > bounds.max[1]) return false;
+  return circleOverlapsAabb(p[0], p[2], state.player.radius, bounds.min[0], bounds.max[0], bounds.min[2], bounds.max[2]);
+}
+
+function updatePlayerReadout() {
+  if (!ui.playerPosition) return;
+  if (!state.player.enabled) {
+    ui.playerPosition.textContent = "orbit camera";
+    return;
+  }
+  const p = state.player.position.map((value) => value.toFixed(1));
+  ui.playerPosition.textContent = `player ${p[0]}, ${p[1]}, ${p[2]} ${state.player.grounded ? "grounded" : "air"}`;
+}
+
 function robustCameraMeshes(meshes) {
   if (meshes.length < 8) return meshes;
   const centers = meshes.map((mesh) => boundsCenter(mesh.bounds));
@@ -708,6 +907,11 @@ function robustCameraMeshes(meshes) {
 }
 
 function render() {
+  const now = performance.now() * 0.001;
+  const dt = clamp(now - state.lastFrameTime, 0.001, 0.05);
+  state.lastFrameTime = now;
+  updatePlayer(dt);
+
   resizeCanvas();
   gl.viewport(0, 0, canvas.width, canvas.height);
   drawSkyBackground();
@@ -719,8 +923,9 @@ function render() {
 
   const aspect = canvas.width / Math.max(canvas.height, 1);
   const projection = perspective(45 * Math.PI / 180, aspect, 0.1, Math.max(4000, state.distance * 6));
-  const eye = orbitEye();
-  const view = lookAt(eye, state.target, [0, 1, 0]);
+  const camera = currentCamera();
+  const eye = camera.eye;
+  const view = lookAt(camera.eye, camera.target, [0, 1, 0]);
 
   gl.useProgram(program);
   gl.uniformMatrix4fv(loc.uProjection, false, projection);
@@ -734,9 +939,8 @@ function render() {
   gl.uniform1f(loc.uSpecularScale, state.specularStrength);
   applyLightingUniforms();
 
-  const time = performance.now() * 0.001;
-  drawMeshes(state.meshes.filter((mesh) => !mesh.hasTransparent), false, time);
-  drawMeshes(sortedTransparentMeshes(eye), true, time);
+  drawMeshes(state.meshes.filter((mesh) => !mesh.hasTransparent), false, now);
+  drawMeshes(sortedTransparentMeshes(eye), true, now);
   drawRuntimeDebug(projection, view);
 
   requestAnimationFrame(render);
@@ -952,13 +1156,16 @@ function drawRuntimeDebug(projection, view) {
 
 function runtimeDebugLines() {
   if (!state.runtime) return [];
-  if (state.runtimeLineCache) return state.runtimeLineCache;
+  if (state.runtimeLineCache && !state.player.enabled) return state.runtimeLineCache;
   const groups = [];
   if (state.runtimeDebug.colliders) {
     groups.push({ color: [0.47, 0.96, 0.83, 0.72], points: boundsLines((state.runtime.physics?.colliders || []).map((item) => item.bounds)) });
   }
   if (state.runtimeDebug.spawn) {
     groups.push({ color: [0.88, 1.0, 0.62, 1.0], points: markerLines(runtimeSpawnMarker(), 3.2) });
+  }
+  if (state.player.enabled) {
+    groups.push({ color: [0.78, 1.0, 0.52, 1.0], points: playerLines() });
   }
   if (state.runtimeDebug.teleport) {
     groups.push({ color: [0.55, 0.74, 1.0, 0.9], points: markerLines(state.runtime.navigation?.teleport || [], 2.2) });
@@ -971,8 +1178,22 @@ function runtimeDebugLines() {
     const collectibles = state.runtime.interactions?.collectibles || [];
     groups.push({ color: [1.0, 0.78, 0.36, 0.92], points: boundsLines(collectibles.map((item) => item.bounds)).concat(markerLines(collectibles, 1.1)) });
   }
-  state.runtimeLineCache = groups.filter((group) => group.points.length > 0);
-  return state.runtimeLineCache;
+  const result = groups.filter((group) => group.points.length > 0);
+  if (!state.player.enabled) state.runtimeLineCache = result;
+  return result;
+}
+
+function playerLines() {
+  const p = state.player.position;
+  const r = state.player.radius;
+  const min = [p[0] - r, p[1] - state.player.height * 0.5, p[2] - r];
+  const max = [p[0] + r, p[1] + state.player.height * 0.5, p[2] + r];
+  const points = [];
+  addBoxLines(points, min, max);
+  const eye = playerEye();
+  const forward = playerForward();
+  addLine(points, eye, [eye[0] + forward[0] * 2.2, eye[1] + forward[1] * 2.2, eye[2] + forward[2] * 2.2]);
+  return points;
 }
 
 function boundsLines(boundsItems) {
@@ -1057,6 +1278,7 @@ function orbitEye() {
 
 canvas.addEventListener("pointerdown", (event) => {
   state.dragging = true;
+  state.pointerLook = state.player.enabled;
   state.lastX = event.clientX;
   state.lastY = event.clientY;
   canvas.setPointerCapture(event.pointerId);
@@ -1067,14 +1289,30 @@ canvas.addEventListener("pointermove", (event) => {
   const dy = event.clientY - state.lastY;
   state.lastX = event.clientX;
   state.lastY = event.clientY;
-  state.yaw -= dx * 0.006;
-  state.pitch = clamp(state.pitch - dy * 0.006, -1.35, 1.35);
+  if (state.pointerLook) {
+    state.player.yaw -= dx * 0.006;
+    state.player.pitch = clamp(state.player.pitch - dy * 0.006, -1.15, 1.15);
+  } else {
+    state.yaw -= dx * 0.006;
+    state.pitch = clamp(state.pitch - dy * 0.006, -1.35, 1.35);
+  }
 });
-canvas.addEventListener("pointerup", () => { state.dragging = false; });
+canvas.addEventListener("pointerup", () => { state.dragging = false; state.pointerLook = false; });
 canvas.addEventListener("wheel", (event) => {
   event.preventDefault();
+  if (state.player.enabled) return;
   state.distance = clamp(state.distance * (event.deltaY > 0 ? 1.08 : 0.92), 4, 2500);
 }, { passive: false });
+
+window.addEventListener("keydown", (event) => {
+  if (["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(event.code)) {
+    state.keys.add(event.code);
+    if (state.player.enabled) event.preventDefault();
+  }
+});
+window.addEventListener("keyup", (event) => {
+  state.keys.delete(event.code);
+});
 
 ui.resetView.addEventListener("click", fitCameraFromScene);
 ui.toggleWire.addEventListener("click", () => { state.wire = !state.wire; });
@@ -1102,6 +1340,9 @@ if (ui.objectSearch) {
 }
 if (ui.nextTeleport) {
   ui.nextTeleport.addEventListener("click", jumpToNextTeleport);
+}
+if (ui.togglePlayer) {
+  ui.togglePlayer.addEventListener("click", togglePlayerMode);
 }
 ui.runtimeDebugButtons.forEach((button) => {
   const key = button.dataset.debug;
