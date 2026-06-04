@@ -98,6 +98,8 @@ const state = {
   },
   runtimeLineCache: null,
   teleportIndex: 0,
+  nearbyTeleport: null,
+  nearbyTrigger: null,
   totalMeshes: 0,
   yaw: -0.55,
   pitch: 0.38,
@@ -874,18 +876,42 @@ function jumpToNextTeleport() {
   }
   const target = teleports[state.teleportIndex % teleports.length];
   state.teleportIndex += 1;
-  if (state.player.enabled) {
-    state.player.position = [target.position[0], target.position[1] + state.player.height * 0.5, target.position[2]];
-    state.player.velocityY = 0;
-    snapPlayerToGround(state.player.position);
-    updatePlayerReadout();
-    if (ui.runtimeStatus) ui.runtimeStatus.textContent = `teleport ${state.teleportIndex}/${teleports.length}`;
-    return;
+  teleportPlayerToTarget(target, `teleport ${state.teleportIndex}/${teleports.length}`);
+}
+
+function teleportPlayerToTarget(target, label = "teleport") {
+  if (!target || !Array.isArray(target.position)) return false;
+  if (!state.player.enabled) {
+    state.target = [...target.position];
+    state.distance = clamp(Math.max((target.radius || 2) * 6, 16), 8, 120);
+    state.pitch = clamp(state.pitch, -0.15, 0.75);
+    if (ui.runtimeStatus) ui.runtimeStatus.textContent = label;
+    return true;
   }
-  state.target = [...target.position];
-  state.distance = clamp(Math.max(target.radius * 6, 16), 8, 120);
-  state.pitch = clamp(state.pitch, -0.15, 0.75);
-  if (ui.runtimeStatus) ui.runtimeStatus.textContent = `${state.teleportIndex}/${teleports.length}`;
+  state.player.position = [
+    Number(target.position[0]) || 0,
+    (Number(target.position[1]) || 0) + state.player.height * 0.5,
+    Number(target.position[2]) || 0,
+  ];
+  state.player.velocityY = 0;
+  snapPlayerToGround(state.player.position);
+  updatePlayerReadout();
+  if (ui.runtimeStatus) ui.runtimeStatus.textContent = label;
+  return true;
+}
+
+function activateNearestInteraction() {
+  if (!state.player.enabled) return false;
+  if (state.nearbyTeleport) {
+    teleportPlayerToTarget(state.nearbyTeleport, `teleport: ${state.nearbyTeleport.name || "target"}`);
+    return true;
+  }
+  if (state.nearbyTrigger) {
+    if (ui.runtimeStatus) ui.runtimeStatus.textContent = `trigger: ${state.nearbyTrigger.name || "event"}`;
+    return true;
+  }
+  if (ui.runtimeStatus) ui.runtimeStatus.textContent = "no nearby interaction";
+  return false;
 }
 
 function focusPlayerSpawn() {
@@ -1265,13 +1291,38 @@ function circleOverlapsAabb(x, z, radius, minX, maxX, minZ, maxZ) {
 
 function updateInteractions() {
   const labels = [];
+  state.nearbyTeleport = nearestTeleportTarget();
+  state.nearbyTrigger = null;
+  if (state.nearbyTeleport) labels.push(`E teleport: ${state.nearbyTeleport.name || "target"}`);
   for (const item of state.runtime?.interactions?.triggers || []) {
-    if (playerOverlapsBounds(item.bounds)) labels.push(`trigger: ${item.name}`);
+    if (playerOverlapsBounds(item.bounds)) {
+      state.nearbyTrigger = item;
+      labels.push(`E trigger: ${item.name}`);
+    }
   }
   for (const item of state.runtime?.interactions?.collectibles || []) {
     if (playerOverlapsBounds(item.bounds)) labels.push(`collect: ${item.name}`);
   }
   if (ui.interactionStatus) ui.interactionStatus.textContent = labels[0] || "no interaction";
+}
+
+function nearestTeleportTarget() {
+  if (!state.player.enabled) return null;
+  const p = state.player.position;
+  let best = null;
+  let bestDistance = Infinity;
+  for (const target of runtimeTeleportTargets()) {
+    const dx = p[0] - target.position[0];
+    const dz = p[2] - target.position[2];
+    const dy = Math.abs((p[1] - state.player.height * 0.5) - target.position[1]);
+    const dist = Math.hypot(dx, dz);
+    const radius = clamp((target.radius || 2) * 0.5, 1.4, 5.5);
+    if (dist <= radius && dy <= 3.5 && dist < bestDistance) {
+      best = target;
+      bestDistance = dist;
+    }
+  }
+  return best;
 }
 
 function playerOverlapsBounds(bounds) {
@@ -1576,6 +1627,9 @@ function runtimeDebugLines() {
   if (state.runtimeDebug.teleport) {
     groups.push({ color: [0.55, 0.74, 1.0, 0.9], points: markerLines(state.runtime.navigation?.teleport || [], 2.2) });
   }
+  if (state.nearbyTeleport) {
+    groups.push({ color: [0.95, 1.0, 0.42, 1.0], points: markerLines([state.nearbyTeleport], 4.2) });
+  }
   if (state.runtimeDebug.triggers) {
     const triggers = state.runtime.interactions?.triggers || [];
     groups.push({ color: [1.0, 0.46, 0.58, 0.84], points: boundsLines(triggers.map((item) => item.bounds)).concat(markerLines(triggers, 1.3)) });
@@ -1789,6 +1843,11 @@ function movementCode(event) {
 
 window.addEventListener("keydown", (event) => {
   const code = movementCode(event);
+  if (code === "KeyE" && state.player.enabled) {
+    activateNearestInteraction();
+    event.preventDefault();
+    return;
+  }
   if (["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space", "ShiftLeft", "ShiftRight"].includes(code)) {
     if (code === "Space" && !state.keys.has("Space")) jumpPlayer();
     state.keys.add(code);
