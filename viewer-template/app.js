@@ -986,15 +986,17 @@ function snapPlayerToGround(position) {
   }
   let bestY = -Infinity;
   const feetY = position[1] - state.player.height * 0.5;
+  const maxSnapUp = state.player.grounded ? 0.85 : 0.18;
+  const maxSnapDown = state.player.grounded ? 1.2 : state.player.stepHeight + 0.18;
   for (const item of solidColliders()) {
     const b = item.bounds;
     if (!b?.min || !b?.max) continue;
     if (!circleOverlapsAabb(position[0], position[2], state.player.radius, b.min[0], b.max[0], b.min[2], b.max[2])) continue;
     const groundY = colliderSurfaceY(item, position);
     if (groundY === null) continue;
-    if (groundY <= feetY + state.player.stepHeight + 0.18 && groundY > bestY) bestY = groundY;
+    if (groundY - feetY <= maxSnapUp && feetY - groundY <= maxSnapDown && groundY > bestY) bestY = groundY;
   }
-  if (Number.isFinite(bestY) && feetY - bestY < state.player.stepHeight + 0.18 && feetY - bestY > -0.16) {
+  if (Number.isFinite(bestY)) {
     position[1] = bestY + state.player.height * 0.5;
     state.player.velocityY = 0;
     state.player.grounded = true;
@@ -1005,17 +1007,8 @@ function snapPlayerToGround(position) {
 }
 
 function playerCollision(position) {
-  const minY = position[1] - state.player.height * 0.5;
-  const maxY = position[1] + state.player.height * 0.5;
-  for (const item of solidColliders()) {
-    const b = item.bounds;
-    if (!b?.min || !b?.max) continue;
-    if (colliderSurfaceY(item, position) !== null) continue;
-    if (maxY <= b.min[1] || minY >= b.max[1]) continue;
-    if (circleOverlapsAabb(position[0], position[2], state.player.radius, b.min[0], b.max[0], b.min[2], b.max[2])) {
-      return item;
-    }
-  }
+  // Mesh-only collider mode: surfaces drive grounding, so old AABB wall blocking is disabled.
+  // This avoids invisible Unity BoxCollider volumes stopping ramps and curved walkable meshes.
   return null;
 }
 
@@ -1037,14 +1030,34 @@ function isRampCollider(item) {
 }
 
 function colliderSurfaceY(item, position) {
-  return colliderTriangleSurfaceY(item, position);
+  let bestY = colliderTriangleSurfaceYAt(item, position[0], position[2]);
+  const radius = state.player.radius * 0.85;
+  const probes = [
+    [radius, 0],
+    [-radius, 0],
+    [0, radius],
+    [0, -radius],
+    [radius * 0.7, radius * 0.7],
+    [-radius * 0.7, radius * 0.7],
+    [radius * 0.7, -radius * 0.7],
+    [-radius * 0.7, -radius * 0.7],
+  ];
+  for (const [dx, dz] of probes) {
+    const y = colliderTriangleSurfaceYAt(item, position[0] + dx, position[2] + dz);
+    if (y !== null && (bestY === null || y > bestY)) bestY = y;
+  }
+  return bestY;
 }
 
 function colliderTriangleSurfaceY(item, position) {
+  return colliderTriangleSurfaceYAt(item, position[0], position[2]);
+}
+
+function colliderTriangleSurfaceYAt(item, x, z) {
   let bestY = -Infinity;
   for (const triangles of colliderTriangleSets(item)) {
     for (let i = 0; i + 8 < triangles.length; i += 9) {
-      const y = triangleYAtXZ(position[0], position[2],
+      const y = triangleYAtXZ(x, z,
         [triangles[i], triangles[i + 1], triangles[i + 2]],
         [triangles[i + 3], triangles[i + 4], triangles[i + 5]],
         [triangles[i + 6], triangles[i + 7], triangles[i + 8]]
@@ -1422,7 +1435,7 @@ function runtimeDebugLines() {
   if (state.runtimeDebug.colliders) {
     groups.push({ color: [0.47, 0.96, 0.83, 0.72], points: meshColliderDebugLines() });
   }
-  if (state.runtimeDebug.spawn) {
+  if (state.runtimeDebug.spawn && !state.player.enabled) {
     groups.push({ color: [0.88, 1.0, 0.62, 1.0], points: markerLines(runtimeSpawnMarker(), 3.2) });
   }
   if (state.player.enabled) {
@@ -1451,15 +1464,19 @@ function runtimeDebugLines() {
 function playerLines() {
   const p = state.player.position;
   const r = state.player.radius;
-  const min = [p[0] - r, p[1] - state.player.height * 0.5, p[2] - r];
-  const max = [p[0] + r, p[1] + state.player.height * 0.5, p[2] + r];
+  const footY = p[1] - state.player.height * 0.5;
+  const headY = p[1] + state.player.height * 0.5;
+  const midY = p[1];
   const points = [];
-  addBoxLines(points, min, max);
-  addRingLines(points, [p[0], min[1], p[2]], r, 18);
-  addRingLines(points, [p[0], max[1], p[2]], r, 18);
-  const eye = playerEye();
-  const forward = playerForward();
-  addLine(points, eye, [eye[0] + forward[0] * 2.2, eye[1] + forward[1] * 2.2, eye[2] + forward[2] * 2.2]);
+  addRingLines(points, [p[0], footY, p[2]], r, 24);
+  addRingLines(points, [p[0], midY, p[2]], r, 24);
+  addRingLines(points, [p[0], headY, p[2]], r, 24);
+  for (let i = 0; i < 8; i++) {
+    const a = i / 8 * Math.PI * 2;
+    const x = p[0] + Math.cos(a) * r;
+    const z = p[2] + Math.sin(a) * r;
+    addLine(points, [x, footY, z], [x, headY, z]);
+  }
   return points;
 }
 
