@@ -23,6 +23,8 @@ const ui = {
   metadataStatus: document.getElementById("metadataStatus"),
   semanticStats: document.getElementById("semanticStats"),
   objectSearch: document.getElementById("objectSearch"),
+  modeTabs: Array.from(document.querySelectorAll("[data-panel-mode]")),
+  modePanels: Array.from(document.querySelectorAll("[data-mode-panel]")),
   filterButtons: Array.from(document.querySelectorAll(".filter-button")),
   runtimeDebugButtons: Array.from(document.querySelectorAll(".debug-button")),
   togglePlayer: document.getElementById("togglePlayer"),
@@ -60,6 +62,7 @@ const state = {
   allObjects: [],
   objectFilter: "all",
   objectSearch: "",
+  panelMode: "view",
   metadata: null,
   runtime: null,
   loopRotations: [],
@@ -91,10 +94,10 @@ const state = {
   metadataByPath: new Map(),
   runtimeDebug: {
     colliders: false,
-    spawn: true,
-    teleport: true,
-    triggers: true,
-    collectibles: true,
+    spawn: false,
+    teleport: false,
+    triggers: false,
+    collectibles: false,
   },
   runtimeLineCache: null,
   teleportIndex: 0,
@@ -433,6 +436,19 @@ function setSelectedPhysicsMode(mode) {
   updatePhysicsEditor(item);
   populateObjectList(state.allObjects);
   if (ui.runtimeStatus) ui.runtimeStatus.textContent = `collider: ${mode}`;
+}
+
+function setPanelMode(mode) {
+  state.panelMode = mode;
+  ui.modeTabs.forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.panelMode === mode);
+  });
+  ui.modePanels.forEach((panel) => {
+    panel.classList.toggle("is-active", panel.dataset.modePanel === mode);
+  });
+  if (mode === "view" && ui.runtimeStatus) ui.runtimeStatus.textContent = "view mode";
+  if (mode === "player" && ui.runtimeStatus) ui.runtimeStatus.textContent = state.player.enabled ? "player mode" : "player test";
+  if (mode === "physics" && ui.runtimeStatus) ui.runtimeStatus.textContent = "physical editor";
 }
 
 function physicalMapPayload() {
@@ -1876,6 +1892,9 @@ ui.filterButtons.forEach((button) => {
     populateObjectList(state.allObjects);
   });
 });
+ui.modeTabs.forEach((button) => {
+  button.addEventListener("click", () => setPanelMode(button.dataset.panelMode || "view"));
+});
 if (ui.objectSearch) {
   ui.objectSearch.addEventListener("input", () => {
     state.objectSearch = ui.objectSearch.value;
@@ -1924,6 +1943,7 @@ ui.runtimeDebugButtons.forEach((button) => {
     state.runtimeLineCache = null;
   });
 });
+setPanelMode(state.panelMode);
 
 function bindRange(input, output, apply) {
   if (!input) return;

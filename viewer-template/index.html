@@ -25,10 +25,16 @@
         </div>
       </div>
       <div class="meter" aria-hidden="true"><span id="progressBar"></span></div>
+      <nav class="mode-tabs" aria-label="Viewer modes">
+        <button class="mode-tab is-active" type="button" data-panel-mode="view" data-tip="Guarda la scena, regola camera e resa visiva.">View</button>
+        <button class="mode-tab" type="button" data-panel-mode="player" data-tip="Prova la scena camminando con il player.">Player</button>
+        <button class="mode-tab" type="button" data-panel-mode="physics" data-tip="Modifica collider, trigger e physical map.">Physics</button>
+      </nav>
+      <section class="mode-panel is-active" data-mode-panel="view" aria-label="View controls">
       <div class="controls">
-        <button id="resetView" type="button">Reset View</button>
-        <button id="toggleWire" type="button">Wire</button>
-        <button id="toggleCull" type="button">Cull</button>
+        <button id="resetView" type="button" data-tip="Riporta la camera alla vista completa della scena.">Reset View</button>
+        <button id="toggleWire" type="button" data-tip="Mostra o nasconde le mesh in wireframe.">Wire</button>
+        <button id="toggleCull" type="button" data-tip="Attiva il backface culling per controllare facce e normali.">Cull</button>
       </div>
       <label class="range">
         <span>Exposure</span>
@@ -61,58 +67,65 @@
           <input id="normalStrength" type="range" min="0" max="1.5" step="0.05" value="0.8" />
         </label>
       </section>
-      <section class="semantic-section" aria-label="Physical metadata">
-        <div class="section-title"><h2>Physical Map</h2><span id="metadataStatus">metadata</span></div>
-        <div id="semanticStats" class="semantic-stats"></div>
+      </section>
+      <section class="mode-panel" data-mode-panel="player" aria-label="Player test controls">
         <div class="debug-toggles" id="debugToggles" aria-label="Runtime debug layers">
-          <button class="debug-button" type="button" data-debug="colliders">Colliders</button>
-          <button class="debug-button is-active" type="button" data-debug="spawn">Spawn</button>
-          <button class="debug-button is-active" type="button" data-debug="teleport">Teleport</button>
-          <button class="debug-button is-active" type="button" data-debug="triggers">Triggers</button>
-          <button class="debug-button is-active" type="button" data-debug="collectibles">Collect</button>
+          <button class="debug-button" type="button" data-debug="spawn" data-tip="Mostra il punto in cui nasce il player.">Spawn</button>
+          <button class="debug-button" type="button" data-debug="teleport" data-tip="Mostra i punti teleport esportati da Unity.">Teleport</button>
+          <button class="debug-button" type="button" data-debug="triggers" data-tip="Mostra le aree trigger e gli eventi.">Triggers</button>
+          <button class="debug-button" type="button" data-debug="collectibles" data-tip="Mostra gli oggetti collezionabili/interattivi.">Collect</button>
         </div>
         <div class="runtime-actions" aria-label="Runtime preview controls">
-          <button id="togglePlayer" type="button">Player mode</button>
-          <button id="toggleThirdPerson" type="button">3rd person</button>
-          <button id="nextTeleport" type="button">Next teleport</button>
+          <button id="togglePlayer" type="button" data-tip="Entra o esce dalla navigazione player. WASD muove, Space salta, Shift corre.">Player mode</button>
+          <button id="toggleThirdPerson" type="button" data-tip="Alterna vista in prima e terza persona.">3rd person</button>
+          <button id="nextTeleport" type="button" data-tip="Salta al prossimo teleport della scena. In gioco puoi anche premere E vicino a un teleport.">Next teleport</button>
           <span id="runtimeStatus">runtime preview</span>
         </div>
         <div class="runtime-readout" aria-label="Player runtime status">
           <span id="playerPosition">player offline</span>
           <span id="interactionStatus">no interaction</span>
         </div>
+      </section>
+      <section class="mode-panel" data-mode-panel="physics" aria-label="Physical editor controls">
+        <section class="semantic-section" aria-label="Physical metadata">
+        <div class="section-title"><h2>Physical Map</h2><span id="metadataStatus">metadata</span></div>
+        <div id="semanticStats" class="semantic-stats"></div>
+        <div class="debug-toggles" aria-label="Physics debug layers">
+          <button class="debug-button" type="button" data-debug="colliders" data-tip="Mostra le superfici mesh usate come collider camminabili.">Colliders</button>
+        </div>
         <section class="physics-editor" aria-label="Collider override editor">
           <div class="section-title"><h2>Collider override</h2><span id="physicsEditorStatus">select object</span></div>
           <div class="override-grid" id="physicsOverrideButtons" role="group" aria-label="Selected object collision mode">
-            <button type="button" data-physics-mode="auto">Auto</button>
-            <button type="button" data-physics-mode="walkable">Walkable</button>
-            <button type="button" data-physics-mode="solid">Solid</button>
-            <button type="button" data-physics-mode="none">No collider</button>
-            <button type="button" data-physics-mode="trigger">Trigger</button>
+            <button type="button" data-physics-mode="auto" data-tip="Usa il comportamento automatico: la mesh diventa camminabile.">Auto</button>
+            <button type="button" data-physics-mode="walkable" data-tip="Forza l'oggetto come superficie su cui il player puo camminare.">Walkable</button>
+            <button type="button" data-physics-mode="solid" data-tip="Rende l'oggetto un blocco provvisorio non attraversabile.">Solid</button>
+            <button type="button" data-physics-mode="none" data-tip="Disattiva la collisione di questo oggetto.">No collider</button>
+            <button type="button" data-physics-mode="trigger" data-tip="Non blocca il player, ma viene trattato come area evento.">Trigger</button>
           </div>
           <div class="runtime-readout physics-readout">
             <span id="physicsEditorReadout">no selection</span>
           </div>
           <div class="map-actions" aria-label="Physical map file controls">
-            <button id="savePhysicalMap" type="button">Save map</button>
-            <button id="loadPhysicalMap" type="button">Load map</button>
-            <button id="clearPhysicalMap" type="button">Clear</button>
+            <button id="savePhysicalMap" type="button" data-tip="Scarica un JSON con tutti gli override fisici correnti.">Save map</button>
+            <button id="loadPhysicalMap" type="button" data-tip="Carica un JSON di override fisici salvato prima.">Load map</button>
+            <button id="clearPhysicalMap" type="button" data-tip="Rimuove tutti gli override fisici locali.">Clear</button>
             <input id="physicalMapFile" type="file" accept="application/json,.json" />
           </div>
         </section>
         <div class="filter-bar" role="group" aria-label="Object filters">
-          <button class="filter-button is-active" type="button" data-filter="all">All</button>
-          <button class="filter-button" type="button" data-filter="mesh">Mesh</button>
-          <button class="filter-button" type="button" data-filter="teleport">Teleport</button>
-          <button class="filter-button" type="button" data-filter="collectible">Collect</button>
-          <button class="filter-button" type="button" data-filter="trigger">Trigger</button>
-          <button class="filter-button" type="button" data-filter="collider">Collider</button>
+          <button class="filter-button is-active" type="button" data-filter="all" data-tip="Mostra tutti gli oggetti esportati.">All</button>
+          <button class="filter-button" type="button" data-filter="mesh" data-tip="Mostra solo oggetti con mesh visiva.">Mesh</button>
+          <button class="filter-button" type="button" data-filter="teleport" data-tip="Mostra solo i teleport.">Teleport</button>
+          <button class="filter-button" type="button" data-filter="collectible" data-tip="Mostra solo i collect/interattivi.">Collect</button>
+          <button class="filter-button" type="button" data-filter="trigger" data-tip="Mostra solo trigger/eventi.">Trigger</button>
+          <button class="filter-button" type="button" data-filter="collider" data-tip="Mostra oggetti con collider esportato.">Collider</button>
         </div>
         <input id="objectSearch" class="object-search" type="search" placeholder="Search objects" />
-      </section>
-      <section class="object-section" aria-label="Scene objects">
-        <div class="section-title"><h2>Objects</h2><span id="objectListCount">scene list</span></div>
-        <ol id="objectList" class="object-list"></ol>
+        </section>
+        <section class="object-section" aria-label="Scene objects">
+          <div class="section-title"><h2>Objects</h2><span id="objectListCount">scene list</span></div>
+          <ol id="objectList" class="object-list"></ol>
+        </section>
       </section>
     </section>
   </main>
