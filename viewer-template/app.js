@@ -24,6 +24,7 @@ const ui = {
   filterButtons: Array.from(document.querySelectorAll(".filter-button")),
   runtimeDebugButtons: Array.from(document.querySelectorAll(".debug-button")),
   togglePlayer: document.getElementById("togglePlayer"),
+  toggleThirdPerson: document.getElementById("toggleThirdPerson"),
   nextTeleport: document.getElementById("nextTeleport"),
   runtimeStatus: document.getElementById("runtimeStatus"),
   playerPosition: document.getElementById("playerPosition"),
@@ -54,8 +55,12 @@ const state = {
   runtime: null,
   loopRotations: [],
   transformAnimations: [],
+  selectedObjectPath: "",
+  selectedObjectBounds: null,
+  selectedRuntimeNodes: [],
   player: {
     enabled: false,
+    thirdPerson: false,
     position: [0, 1.7, 0],
     velocityY: 0,
     yaw: 0,
@@ -297,13 +302,71 @@ function populateObjectList(items) {
     const meta = metaFor(item);
     const li = document.createElement("li");
     li.className = `kind-${semanticToken(meta, item)}`;
+    if ((item.hierarchyPath || item.name || "") === state.selectedObjectPath) li.classList.add("is-selected");
+    li.tabIndex = 0;
     const label = document.createElement("span");
     label.textContent = item.hierarchyPath || item.name;
     const chip = document.createElement("b");
     chip.textContent = semanticLabel(meta, item);
     li.append(label, chip);
+    li.addEventListener("click", () => selectObject(item));
+    li.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectObject(item);
+      }
+    });
     ui.objectList.appendChild(li);
   }
+}
+
+function selectObject(item) {
+  state.selectedObjectPath = item.hierarchyPath || item.name || "";
+  state.selectedObjectBounds = boundsForObject(item);
+  state.selectedRuntimeNodes = runtimeNodesForObject(item);
+  state.runtimeLineCache = null;
+  populateObjectList(state.allObjects);
+  focusSelectedObject(item);
+  if (ui.runtimeStatus) {
+    const colliderCount = state.selectedRuntimeNodes.reduce((sum, node) => sum + (node.colliders || []).length, 0);
+    ui.runtimeStatus.textContent = `selected: ${item.name || "object"} (${colliderCount} colliders)`;
+  }
+}
+
+function runtimeNodesForObject(item) {
+  const path = item.hierarchyPath || item.name || "";
+  const pools = [
+    ...(state.runtime?.physics?.colliders || []),
+    ...(state.runtime?.physics?.triggerColliders || []),
+    ...(state.runtime?.navigation?.teleport || []),
+    ...(state.runtime?.interactions?.triggers || []),
+    ...(state.runtime?.interactions?.collectibles || []),
+  ];
+  return pools.filter((node) => {
+    const nodePath = node.path || node.name || "";
+    return nodePath === path || nodePath.startsWith(`${path}/`) || path.startsWith(`${nodePath}/`);
+  });
+}
+
+function focusSelectedObject(item) {
+  const bounds = unionRuntimeBounds([
+    boundsForObject(item),
+    ...state.selectedRuntimeNodes.map((node) => node.bounds),
+  ]);
+  if (!bounds) return;
+  const center = boundsCenter(bounds);
+  const size = Math.max(boundsSize(bounds), 4);
+  state.target = center;
+  state.distance = clamp(size * 2.4, 8, 220);
+  state.pitch = 0.32;
+  if (!state.player.enabled) state.yaw = -0.65;
+}
+
+function boundsForObject(item) {
+  if (item.bounds?.min && item.bounds?.max) return item.bounds;
+  const path = item.hierarchyPath || item.name || "";
+  const mesh = state.meshes.find((candidate) => candidate.path === path || candidate.name === item.name);
+  return mesh?.bounds || null;
 }
 
 function filterObjects(items) {
@@ -616,6 +679,20 @@ function boundsSize(bounds) {
   return Math.max(bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1], bounds.max[2] - bounds.min[2]);
 }
 
+function unionRuntimeBounds(boundsItems) {
+  const valid = boundsItems.filter((bounds) => bounds?.min && bounds?.max);
+  if (!valid.length) return null;
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (const bounds of valid) {
+    for (let i = 0; i < 3; i++) {
+      min[i] = Math.min(min[i], bounds.min[i]);
+      max[i] = Math.max(max[i], bounds.max[i]);
+    }
+  }
+  return { min, max };
+}
+
 function distance(a, b) {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
@@ -756,6 +833,19 @@ function togglePlayerMode() {
     ui.runtimeStatus.textContent = "orbit mode";
   }
   if (ui.togglePlayer) ui.togglePlayer.classList.toggle("is-active", state.player.enabled);
+  if (ui.toggleThirdPerson) ui.toggleThirdPerson.classList.toggle("is-active", state.player.enabled && state.player.thirdPerson);
+  updatePlayerReadout();
+}
+
+function toggleThirdPersonMode() {
+  state.player.thirdPerson = !state.player.thirdPerson;
+  if (!state.player.enabled) {
+    state.player.enabled = true;
+    resetPlayerToSpawn();
+  }
+  if (ui.togglePlayer) ui.togglePlayer.classList.add("is-active");
+  if (ui.toggleThirdPerson) ui.toggleThirdPerson.classList.toggle("is-active", state.player.thirdPerson);
+  if (ui.runtimeStatus) ui.runtimeStatus.textContent = state.player.thirdPerson ? "third person" : "first person";
   updatePlayerReadout();
 }
 
@@ -767,6 +857,18 @@ function currentCamera() {
 
   const eye = playerEye();
   const forward = playerForward();
+  if (state.player.thirdPerson) {
+    const flatForward = [Math.sin(state.player.yaw), 0, Math.cos(state.player.yaw)];
+    const followEye = [
+      state.player.position[0] - flatForward[0] * 8,
+      state.player.position[1] + state.player.height * 2.6,
+      state.player.position[2] - flatForward[2] * 8,
+    ];
+    return {
+      eye: followEye,
+      target: [eye[0], eye[1] - state.player.height * 0.2, eye[2]],
+    };
+  }
   return {
     eye,
     target: [eye[0] + forward[0], eye[1] + forward[1], eye[2] + forward[2]],
@@ -1000,7 +1102,8 @@ function updatePlayerReadout() {
   const p = state.player.position.map((value) => value.toFixed(1));
   const jumpText = state.player.grounded ? "grounded" : `air ${state.player.jumpsUsed}/${state.player.maxJumps}`;
   const speedText = (state.keys.has("ShiftLeft") || state.keys.has("ShiftRight")) ? "run" : "walk";
-  ui.playerPosition.textContent = `player ${p[0]}, ${p[1]}, ${p[2]} ${jumpText} ${speedText}`;
+  const cameraText = state.player.thirdPerson ? "TP" : "FP";
+  ui.playerPosition.textContent = `player ${p[0]}, ${p[1]}, ${p[2]} ${jumpText} ${speedText} ${cameraText}`;
 }
 
 function robustCameraMeshes(meshes) {
@@ -1276,6 +1379,10 @@ function runtimeDebugLines() {
   if (state.player.enabled) {
     groups.push({ color: [0.78, 1.0, 0.52, 1.0], points: playerLines() });
   }
+  if (state.selectedObjectBounds || state.selectedRuntimeNodes.length) {
+    groups.push({ color: [1.0, 0.78, 0.28, 1.0], points: selectedColliderLines() });
+    groups.push({ color: [0.38, 0.92, 1.0, 0.82], points: selectedTriangleLines() });
+  }
   if (state.runtimeDebug.teleport) {
     groups.push({ color: [0.55, 0.74, 1.0, 0.9], points: markerLines(state.runtime.navigation?.teleport || [], 2.2) });
   }
@@ -1299,9 +1406,38 @@ function playerLines() {
   const max = [p[0] + r, p[1] + state.player.height * 0.5, p[2] + r];
   const points = [];
   addBoxLines(points, min, max);
+  addRingLines(points, [p[0], min[1], p[2]], r, 18);
+  addRingLines(points, [p[0], max[1], p[2]], r, 18);
   const eye = playerEye();
   const forward = playerForward();
   addLine(points, eye, [eye[0] + forward[0] * 2.2, eye[1] + forward[1] * 2.2, eye[2] + forward[2] * 2.2]);
+  return points;
+}
+
+function selectedColliderLines() {
+  const bounds = [
+    state.selectedObjectBounds,
+    ...state.selectedRuntimeNodes.map((node) => node.bounds),
+  ].filter(Boolean);
+  return boundsLines(bounds);
+}
+
+function selectedTriangleLines() {
+  const points = [];
+  for (const node of state.selectedRuntimeNodes) {
+    for (const collider of node.colliders || []) {
+      const triangles = Array.isArray(collider.triangles) ? collider.triangles : [];
+      const stride = Math.max(9, Math.ceil(triangles.length / (9 * 240)) * 9);
+      for (let i = 0; i + 8 < triangles.length; i += stride) {
+        const a = [triangles[i], triangles[i + 1], triangles[i + 2]];
+        const b = [triangles[i + 3], triangles[i + 4], triangles[i + 5]];
+        const c = [triangles[i + 6], triangles[i + 7], triangles[i + 8]];
+        addLine(points, a, b);
+        addLine(points, b, c);
+        addLine(points, c, a);
+      }
+    }
+  }
   return points;
 }
 
@@ -1325,6 +1461,18 @@ function markerLines(items, size) {
     addLine(points, [p[0], p[1], p[2] - s], [p[0], p[1], p[2] + s]);
   }
   return points;
+}
+
+function addRingLines(points, center, radius, segments) {
+  for (let i = 0; i < segments; i++) {
+    const a = i / segments * Math.PI * 2;
+    const b = (i + 1) / segments * Math.PI * 2;
+    addLine(
+      points,
+      [center[0] + Math.cos(a) * radius, center[1], center[2] + Math.sin(a) * radius],
+      [center[0] + Math.cos(b) * radius, center[1], center[2] + Math.sin(b) * radius]
+    );
+  }
 }
 
 function addBoxLines(points, min, max) {
@@ -1467,6 +1615,9 @@ if (ui.nextTeleport) {
 }
 if (ui.togglePlayer) {
   ui.togglePlayer.addEventListener("click", togglePlayerMode);
+}
+if (ui.toggleThirdPerson) {
+  ui.toggleThirdPerson.addEventListener("click", toggleThirdPersonMode);
 }
 ui.runtimeDebugButtons.forEach((button) => {
   const key = button.dataset.debug;
