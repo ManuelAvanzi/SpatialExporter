@@ -141,6 +141,7 @@ function readJsonFile(file) {
 
 function buildSpatialScene(raw, context) {
   const materials = new Map();
+  const entrancePoints = buildEntrancePoints(raw.entrancePoints || []);
   const nodes = (raw.objects || []).map((object, index) => {
     const materialIds = (object.materials || []).map((material) => registerMaterial(materials, material));
     return {
@@ -185,8 +186,10 @@ function buildSpatialScene(raw, context) {
       materials: materials.size,
       texturedMaterials,
       lights: raw.lighting?.lights?.length || 0,
+      entrancePoints: entrancePoints.length,
     },
     nodes,
+    entrancePoints,
     materials: [...materials.values()],
     lights: raw.lighting?.lights || [],
     lighting: raw.lighting || null,
@@ -199,8 +202,27 @@ function buildSpatialScene(raw, context) {
         triggers: nodes.filter((node) => node.flags.trigger).map((node) => node.id),
         collectibles: nodes.filter((node) => node.flags.collectible).map((node) => node.id),
       },
+      player: {
+        entrancePoints: entrancePoints.map((point) => point.id),
+      },
     },
   };
+}
+
+function buildEntrancePoints(points) {
+  return points.map((point, index) => ({
+    id: `entrance_${String(index).padStart(3, "0")}`,
+    name: point.name || "Entrance Point",
+    path: point.hierarchyPath || point.name || "",
+    tag: point.tag || "",
+    layer: Number.isFinite(point.layer) ? point.layer : 0,
+    layerName: point.layerName || "",
+    transform: point.transform || null,
+    position: roundVec(point.transform?.position || [0, 0, 0]),
+    rotationEuler: roundVec(point.transform?.rotationEuler || [0, 0, 0]),
+    matrix: Array.isArray(point.transform?.matrix) ? point.transform.matrix.map(roundNumber) : [],
+    radius: roundNumber(point.radius || 0),
+  }));
 }
 
 function registerMaterial(materials, material) {
@@ -284,6 +306,7 @@ function classifyMaterial(material) {
 }
 function buildWebXrRuntime(spatialScene) {
   const nodes = spatialScene.nodes || [];
+  const entrancePoints = spatialScene.entrancePoints || [];
   const teleport = nodes.filter((node) => node.flags?.teleport).map((node) => runtimeNode(node, "teleport"));
   const triggers = nodes.filter((node) => node.flags?.trigger).map((node) => runtimeNode(node, "trigger"));
   const collectibles = nodes.filter((node) => node.flags?.collectible).map((node) => runtimeNode(node, "collectible"));
@@ -319,13 +342,24 @@ function buildWebXrRuntime(spatialScene) {
       triggers: triggers.length,
       collectibles: collectibles.length,
       lights: spatialScene.stats?.lights || 0,
+      entrancePoints: entrancePoints.length,
     },
     navigation: {
+      entrancePoints,
       teleport,
       defaultRig: {
         type: "standing",
         height: 1.7,
         radius: 0.28,
+      },
+    },
+    player: {
+      spawn: defaultSpawn(entrancePoints, teleport),
+      rig: {
+        type: "firstPerson",
+        height: 1.7,
+        radius: 0.28,
+        movement: "walk",
       },
     },
     physics: {
@@ -344,6 +378,51 @@ function buildWebXrRuntime(spatialScene) {
     },
     lights: spatialScene.lights || [],
   };
+}
+
+function defaultSpawn(entrancePoints, teleport) {
+  const explicit = entrancePoints.find((point) => Array.isArray(point.position) && point.position.length >= 3);
+  if (explicit) {
+    return {
+      source: "entrancePoint",
+      id: explicit.id,
+      name: explicit.name,
+      position: explicit.position,
+      rotationEuler: explicit.rotationEuler || [0, 0, 0],
+      radius: explicit.radius || 0,
+    };
+  }
+
+  const fallback = teleport.find((point) => Array.isArray(point.position) && point.position.length >= 3);
+  if (fallback) {
+    return {
+      source: "teleportFallback",
+      id: fallback.id,
+      name: fallback.name,
+      position: fallback.position,
+      rotationEuler: [0, 0, 0],
+      radius: runtimeBoundsRadius(fallback.bounds),
+    };
+  }
+
+  return {
+    source: "sceneFallback",
+    id: "",
+    name: "Scene center",
+    position: [0, 1.7, 0],
+    rotationEuler: [0, 0, 0],
+    radius: 0,
+  };
+}
+
+function runtimeBoundsRadius(bounds) {
+  if (!bounds?.min || !bounds?.max) return 2;
+  return Math.max(
+    bounds.max[0] - bounds.min[0],
+    bounds.max[1] - bounds.min[1],
+    bounds.max[2] - bounds.min[2],
+    2
+  );
 }
 
 function runtimeNode(node, role, options = {}) {

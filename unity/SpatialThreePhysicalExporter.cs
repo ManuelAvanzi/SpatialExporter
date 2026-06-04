@@ -58,6 +58,7 @@ public static class SpatialThreePhysicalExporter
             unityVersion = Application.unityVersion,
             coordinateSystem = "Unity converted to Three-friendly OBJ coordinates: x,y,-z with reversed triangle winding.",
             objects = new List<PhysicalObjectExport>(),
+            entrancePoints = ExportEntrancePoints(scene),
             lighting = ExportLighting(scene)
         };
 
@@ -127,6 +128,89 @@ public static class SpatialThreePhysicalExporter
             lights = lights.ToArray()
         };
     }
+    private static EntrancePointExport[] ExportEntrancePoints(Scene scene)
+    {
+        var points = new List<EntrancePointExport>();
+        foreach (GameObject root in scene.GetRootGameObjects())
+        {
+            Transform[] transforms = root.GetComponentsInChildren<Transform>(true);
+            foreach (Transform transform in transforms)
+            {
+                GameObject go = transform.gameObject;
+                if (!go.activeInHierarchy || !IsEntrancePoint(go))
+                {
+                    continue;
+                }
+
+                points.Add(new EntrancePointExport
+                {
+                    name = go.name,
+                    hierarchyPath = GetHierarchyPath(transform),
+                    tag = go.tag,
+                    layer = go.layer,
+                    layerName = LayerMask.LayerToName(go.layer),
+                    transform = TransformExport.From(transform),
+                    radius = ReadFloatField(go, "radius", 0f)
+                });
+            }
+        }
+
+        return points.ToArray();
+    }
+
+    private static bool IsEntrancePoint(GameObject go)
+    {
+        string normalizedName = NormalizeSpatialName(go.name);
+        if (normalizedName.Contains("entrancepoint") || normalizedName.Contains("spawnpoint") || normalizedName.Contains("playerstart"))
+        {
+            return true;
+        }
+
+        MonoBehaviour[] behaviours = go.GetComponents<MonoBehaviour>();
+        foreach (MonoBehaviour behaviour in behaviours)
+        {
+            if (behaviour == null)
+            {
+                continue;
+            }
+
+            string typeName = behaviour.GetType().Name.ToLowerInvariant();
+            if ((typeName.Contains("entrance") && typeName.Contains("point")) || typeName.Contains("spawnpoint"))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string NormalizeSpatialName(string value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : value.Replace(" ", string.Empty).Replace("_", string.Empty).Replace("-", string.Empty).ToLowerInvariant();
+    }
+
+    private static float ReadFloatField(GameObject go, string fieldName, float fallback)
+    {
+        MonoBehaviour[] behaviours = go.GetComponents<MonoBehaviour>();
+        foreach (MonoBehaviour behaviour in behaviours)
+        {
+            if (behaviour == null)
+            {
+                continue;
+            }
+
+            var field = behaviour.GetType().GetField(fieldName);
+            if (field != null && field.FieldType == typeof(float))
+            {
+                return (float)field.GetValue(behaviour);
+            }
+        }
+
+        return fallback;
+    }
+
     private static void Traverse(Transform transform, List<PhysicalObjectExport> objects, string meshDir, string textureDir, ref int meshIndex)
     {
         GameObject go = transform.gameObject;
@@ -607,7 +691,20 @@ public static class SpatialThreePhysicalExporter
         public string unityVersion;
         public string coordinateSystem;
         public List<PhysicalObjectExport> objects;
+        public EntrancePointExport[] entrancePoints;
         public SceneLightingExport lighting;
+    }
+
+    [Serializable]
+    private class EntrancePointExport
+    {
+        public string name;
+        public string hierarchyPath;
+        public string tag;
+        public int layer;
+        public string layerName;
+        public TransformExport transform;
+        public float radius;
     }
 
     [Serializable]

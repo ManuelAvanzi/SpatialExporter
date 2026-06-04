@@ -52,6 +52,7 @@ const state = {
   metadataByPath: new Map(),
   runtimeDebug: {
     colliders: false,
+    spawn: true,
     teleport: true,
     triggers: true,
     collectibles: true,
@@ -256,6 +257,7 @@ async function init() {
 
   await Promise.all(workers);
   fitCameraFromScene();
+  focusPlayerSpawn();
 }
 
 function populateObjectList(items) {
@@ -296,13 +298,15 @@ function populateMetadataPanel(metadata) {
   }
   const stats = metadata.stats || {};
   const webxr = metadata.webxr || {};
+  const interactions = webxr.interactions || {};
   const entries = [
     ["Colliders", stats.colliders],
     ["Materials", stats.materials],
     ["Textures", stats.texturedMaterials],
     ["Lights", stats.lights],
-    ["Teleport", (webxr.teleport || []).length],
-    ["Triggers", (webxr.triggers || []).length],
+    ["Entrances", stats.entrancePoints],
+    ["Teleport", (interactions.teleport || []).length],
+    ["Triggers", (interactions.triggers || []).length],
   ];
   if (ui.metadataStatus) ui.metadataStatus.textContent = metadata.mode || "physical";
   ui.semanticStats.innerHTML = entries.map(([label, value]) => `<span><b>${value ?? 0}</b>${label}</span>`).join("");
@@ -630,6 +634,32 @@ function jumpToNextTeleport() {
   if (ui.runtimeStatus) ui.runtimeStatus.textContent = `${state.teleportIndex}/${teleports.length}`;
 }
 
+function focusPlayerSpawn() {
+  const spawn = state.runtime?.player?.spawn;
+  if (!spawn || !Array.isArray(spawn.position) || spawn.position.length < 3) return;
+  const position = [
+    Number(spawn.position[0]) || 0,
+    Number(spawn.position[1]) || 0,
+    Number(spawn.position[2]) || 0,
+  ];
+  state.target = [position[0], position[1] + 1.15, position[2]];
+  state.distance = 18;
+  state.pitch = 0.22;
+  const yawDegrees = Array.isArray(spawn.rotationEuler) ? Number(spawn.rotationEuler[1]) || 0 : 0;
+  state.yaw = (yawDegrees * Math.PI / 180) - 0.45;
+  if (ui.runtimeStatus) ui.runtimeStatus.textContent = `spawn: ${spawn.name || spawn.source || "player"}`;
+}
+
+function runtimeSpawnMarker() {
+  const spawn = state.runtime?.player?.spawn;
+  if (!spawn || !Array.isArray(spawn.position) || spawn.position.length < 3) return [];
+  return [{
+    id: spawn.id || "spawn",
+    name: spawn.name || "Player spawn",
+    position: spawn.position,
+  }];
+}
+
 function runtimeTeleportTargets() {
   return (state.runtime?.navigation?.teleport || [])
     .filter((item) => Array.isArray(item.position) && item.position.length >= 3)
@@ -869,6 +899,9 @@ function runtimeDebugLines() {
   const groups = [];
   if (state.runtimeDebug.colliders) {
     groups.push({ color: [0.47, 0.96, 0.83, 0.72], points: boundsLines((state.runtime.physics?.colliders || []).map((item) => item.bounds)) });
+  }
+  if (state.runtimeDebug.spawn) {
+    groups.push({ color: [0.88, 1.0, 0.62, 1.0], points: markerLines(runtimeSpawnMarker(), 3.2) });
   }
   if (state.runtimeDebug.teleport) {
     groups.push({ color: [0.55, 0.74, 1.0, 0.9], points: markerLines(state.runtime.navigation?.teleport || [], 2.2) });
