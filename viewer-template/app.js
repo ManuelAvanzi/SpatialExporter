@@ -23,6 +23,8 @@ const ui = {
   objectSearch: document.getElementById("objectSearch"),
   filterButtons: Array.from(document.querySelectorAll(".filter-button")),
   runtimeDebugButtons: Array.from(document.querySelectorAll(".debug-button")),
+  nextTeleport: document.getElementById("nextTeleport"),
+  runtimeStatus: document.getElementById("runtimeStatus"),
   resetView: document.getElementById("resetView"),
   toggleWire: document.getElementById("toggleWire"),
   toggleCull: document.getElementById("toggleCull"),
@@ -55,6 +57,7 @@ const state = {
     collectibles: true,
   },
   runtimeLineCache: null,
+  teleportIndex: 0,
   totalMeshes: 0,
   yaw: -0.55,
   pitch: 0.38,
@@ -613,6 +616,45 @@ function fitCameraFromScene() {
   state.distance = clamp(span * 1.55, 8, 2200);
 }
 
+function jumpToNextTeleport() {
+  const teleports = runtimeTeleportTargets();
+  if (!teleports.length) {
+    if (ui.runtimeStatus) ui.runtimeStatus.textContent = "no teleport";
+    return;
+  }
+  const target = teleports[state.teleportIndex % teleports.length];
+  state.teleportIndex += 1;
+  state.target = [...target.position];
+  state.distance = clamp(Math.max(target.radius * 6, 16), 8, 120);
+  state.pitch = clamp(state.pitch, -0.15, 0.75);
+  if (ui.runtimeStatus) ui.runtimeStatus.textContent = `${state.teleportIndex}/${teleports.length}`;
+}
+
+function runtimeTeleportTargets() {
+  return (state.runtime?.navigation?.teleport || [])
+    .filter((item) => Array.isArray(item.position) && item.position.length >= 3)
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      position: [
+        Number(item.position[0]) || 0,
+        Number(item.position[1]) || 0,
+        Number(item.position[2]) || 0,
+      ],
+      radius: runtimeBoundsRadius(item.bounds),
+    }));
+}
+
+function runtimeBoundsRadius(bounds) {
+  if (!bounds?.min || !bounds?.max) return 2;
+  return Math.max(
+    bounds.max[0] - bounds.min[0],
+    bounds.max[1] - bounds.min[1],
+    bounds.max[2] - bounds.min[2],
+    2
+  );
+}
+
 function robustCameraMeshes(meshes) {
   if (meshes.length < 8) return meshes;
   const centers = meshes.map((mesh) => boundsCenter(mesh.bounds));
@@ -967,6 +1009,9 @@ if (ui.objectSearch) {
     state.objectSearch = ui.objectSearch.value;
     populateObjectList(state.allObjects);
   });
+}
+if (ui.nextTeleport) {
+  ui.nextTeleport.addEventListener("click", jumpToNextTeleport);
 }
 ui.runtimeDebugButtons.forEach((button) => {
   const key = button.dataset.debug;
