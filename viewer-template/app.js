@@ -455,10 +455,13 @@ async function createMesh(item, parsed) {
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(parsed.uvs), gl.STATIC_DRAW);
 
   const materials = await materialData(item);
+  const bounds = transformBounds(parsed.bounds, model);
+  const collisionTriangles = sampleVisualCollisionTriangles(parsed.positions, model);
 
   return {
     name: item.name,
     path: item.hierarchyPath || item.name || "",
+    sourceMesh: item.mesh || "",
     count: parsed.positions.length / 3,
     positionBuffer,
     normalBuffer,
@@ -468,8 +471,25 @@ async function createMesh(item, parsed) {
     materials,
     hasTransparent: materials.some((material) => material.transparent),
     groups: parsed.groups,
-    bounds: transformBounds(parsed.bounds, model),
+    bounds,
+    collisionTriangles,
   };
+}
+
+function sampleVisualCollisionTriangles(positions, model) {
+  if (!positions?.length) return [];
+  const triangleCount = Math.floor(positions.length / 9);
+  const maxTriangles = 900;
+  const stride = Math.max(1, Math.floor(triangleCount / maxTriangles));
+  const triangles = [];
+  for (let triangle = 0; triangle < triangleCount && triangles.length < maxTriangles * 9; triangle += stride) {
+    const i = triangle * 9;
+    const a = transformPoint(model, [positions[i], positions[i + 1], positions[i + 2]]);
+    const b = transformPoint(model, [positions[i + 3], positions[i + 4], positions[i + 5]]);
+    const c = transformPoint(model, [positions[i + 6], positions[i + 7], positions[i + 8]]);
+    triangles.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
+  }
+  return triangles;
 }
 
 function parseObj(text) {
@@ -1022,8 +1042,7 @@ function colliderSurfaceY(item, position) {
 
 function colliderTriangleSurfaceY(item, position) {
   let bestY = -Infinity;
-  for (const collider of item.colliders || []) {
-    const triangles = Array.isArray(collider.triangles) ? collider.triangles : [];
+  for (const triangles of colliderTriangleSets(item)) {
     for (let i = 0; i + 8 < triangles.length; i += 9) {
       const y = triangleYAtXZ(position[0], position[2],
         [triangles[i], triangles[i + 1], triangles[i + 2]],
@@ -1036,7 +1055,24 @@ function colliderTriangleSurfaceY(item, position) {
   return Number.isFinite(bestY) ? bestY : null;
 }
 
+function colliderTriangleSets(item) {
+  const sets = [];
+  for (const collider of item.colliders || []) {
+    if (Array.isArray(collider.triangles) && collider.triangles.length) sets.push(collider.triangles);
+  }
+  const meshTriangles = visualMeshTrianglesForNode(item);
+  if (meshTriangles.length) sets.push(meshTriangles);
+  return sets;
+}
+
+function visualMeshTrianglesForNode(item) {
+  if (!item?.mesh) return [];
+  const mesh = state.meshes.find((candidate) => candidate.sourceMesh === item.mesh || candidate.path === item.path);
+  return mesh?.collisionTriangles || [];
+}
+
 function triangleYAtXZ(x, z, a, b, c) {
+  if (!isWalkableTriangle(a, b, c)) return null;
   const v0x = b[0] - a[0];
   const v0z = b[2] - a[2];
   const v1x = c[0] - a[0];
@@ -1051,6 +1087,16 @@ function triangleYAtXZ(x, z, a, b, c) {
   const epsilon = -0.03;
   if (u < epsilon || v < epsilon || w < epsilon) return null;
   return a[1] * w + b[1] * u + c[1] * v;
+}
+
+function isWalkableTriangle(a, b, c) {
+  const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+  const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+  const nx = uy * vz - uz * vy;
+  const ny = uz * vx - ux * vz;
+  const nz = ux * vy - uy * vx;
+  const len = Math.hypot(nx, ny, nz) || 1;
+  return Math.abs(ny) / len > 0.22;
 }
 
 function rampSurfaceY(item, position) {
@@ -1425,8 +1471,7 @@ function selectedColliderLines() {
 function selectedTriangleLines() {
   const points = [];
   for (const node of state.selectedRuntimeNodes) {
-    for (const collider of node.colliders || []) {
-      const triangles = Array.isArray(collider.triangles) ? collider.triangles : [];
+    for (const triangles of colliderTriangleSets(node)) {
       const stride = Math.max(9, Math.ceil(triangles.length / (9 * 240)) * 9);
       for (let i = 0; i + 8 < triangles.length; i += stride) {
         const a = [triangles[i], triangles[i + 1], triangles[i + 2]];
