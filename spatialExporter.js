@@ -635,6 +635,8 @@ function runtimeCollider(collider) {
     height: roundNumber(collider.height || size[1] || 0),
     meshName: collider.meshName || "",
     convex: Boolean(collider.convex),
+    triangleCount: Number.isFinite(collider.triangleCount) ? collider.triangleCount : 0,
+    triangles: Array.isArray(collider.triangles) ? collider.triangles.map(roundNumber) : [],
     bounds: boundsFromCenterSize(center, size),
   };
 }

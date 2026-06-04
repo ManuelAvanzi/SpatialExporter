@@ -868,7 +868,7 @@ function snapPlayerToGround(position) {
     const b = item.bounds;
     if (!b?.min || !b?.max) continue;
     if (!circleOverlapsAabb(position[0], position[2], state.player.radius, b.min[0], b.max[0], b.min[2], b.max[2])) continue;
-    const groundY = rampSurfaceY(item, position) ?? b.max[1];
+    const groundY = colliderSurfaceY(item, position) ?? b.max[1];
     if (groundY <= feetY + state.player.stepHeight + 0.18 && groundY > bestY) bestY = groundY;
   }
   if (Number.isFinite(bestY) && feetY - bestY < state.player.stepHeight + 0.18 && feetY - bestY > -0.16) {
@@ -887,7 +887,7 @@ function playerCollision(position) {
   for (const item of solidColliders()) {
     const b = item.bounds;
     if (!b?.min || !b?.max) continue;
-    if (isRampCollider(item)) continue;
+    if (isWalkableMeshCollider(item, position)) continue;
     if (maxY <= b.min[1] || minY >= b.max[1]) continue;
     if (circleOverlapsAabb(position[0], position[2], state.player.radius, b.min[0], b.max[0], b.min[2], b.max[2])) {
       return item;
@@ -908,6 +908,47 @@ function solidColliders() {
 function isRampCollider(item) {
   const text = `${item.name || ""} ${item.path || ""}`.toLowerCase();
   return text.includes("scala") || text.includes("ramp") || text.includes("stairs");
+}
+
+function isWalkableMeshCollider(item, position) {
+  return isRampCollider(item) || colliderTriangleSurfaceY(item, position) !== null;
+}
+
+function colliderSurfaceY(item, position) {
+  return colliderTriangleSurfaceY(item, position) ?? rampSurfaceY(item, position);
+}
+
+function colliderTriangleSurfaceY(item, position) {
+  let bestY = -Infinity;
+  for (const collider of item.colliders || []) {
+    const triangles = Array.isArray(collider.triangles) ? collider.triangles : [];
+    for (let i = 0; i + 8 < triangles.length; i += 9) {
+      const y = triangleYAtXZ(position[0], position[2],
+        [triangles[i], triangles[i + 1], triangles[i + 2]],
+        [triangles[i + 3], triangles[i + 4], triangles[i + 5]],
+        [triangles[i + 6], triangles[i + 7], triangles[i + 8]]
+      );
+      if (y !== null && y > bestY) bestY = y;
+    }
+  }
+  return Number.isFinite(bestY) ? bestY : null;
+}
+
+function triangleYAtXZ(x, z, a, b, c) {
+  const v0x = b[0] - a[0];
+  const v0z = b[2] - a[2];
+  const v1x = c[0] - a[0];
+  const v1z = c[2] - a[2];
+  const v2x = x - a[0];
+  const v2z = z - a[2];
+  const denom = v0x * v1z - v1x * v0z;
+  if (Math.abs(denom) < 0.00001) return null;
+  const u = (v2x * v1z - v1x * v2z) / denom;
+  const v = (v0x * v2z - v2x * v0z) / denom;
+  const w = 1 - u - v;
+  const epsilon = -0.03;
+  if (u < epsilon || v < epsilon || w < epsilon) return null;
+  return a[1] * w + b[1] * u + c[1] * v;
 }
 
 function rampSurfaceY(item, position) {

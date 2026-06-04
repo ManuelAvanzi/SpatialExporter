@@ -13,6 +13,7 @@ public static class SpatialThreePhysicalExporter
 {
     private const string MenuPath = "Tools/Spatial Reload/Export BODYLAB3 Physical Objects";
     private const string BodyLab3ScenePath = "Assets/Examples/BODYLAB3/BodyLab3_Scene.unity";
+    private const int MaxColliderTriangleSamples = 900;
 
     [MenuItem(MenuPath)]
     public static void ExportBodyLab3ScenePhysicalObjects()
@@ -766,13 +767,55 @@ public static class SpatialThreePhysicalExporter
             {
                 item.meshName = meshCollider.sharedMesh.name;
                 item.convex = meshCollider.convex;
+                item.triangleCount = meshCollider.sharedMesh.triangles.Length / 3;
+                item.triangles = ExportColliderTriangleSample(meshCollider);
             }
 
             output.Add(item);
         }
 
         return output.ToArray();
-    }private static void WriteObj(Mesh mesh, string path)
+    }
+
+    private static float[] ExportColliderTriangleSample(MeshCollider meshCollider)
+    {
+        Mesh mesh = meshCollider.sharedMesh;
+        if (mesh == null || mesh.vertexCount == 0)
+        {
+            return Array.Empty<float>();
+        }
+
+        int[] indices = mesh.triangles;
+        Vector3[] vertices = mesh.vertices;
+        int triangleCount = indices.Length / 3;
+        int sampleCount = Math.Min(triangleCount, MaxColliderTriangleSamples);
+        if (sampleCount <= 0)
+        {
+            return Array.Empty<float>();
+        }
+
+        int stride = Math.Max(1, triangleCount / sampleCount);
+        var output = new List<float>(sampleCount * 9);
+        for (int triangle = 0; triangle < triangleCount && output.Count < sampleCount * 9; triangle += stride)
+        {
+            int i = triangle * 3;
+            AppendWorldColliderVertex(output, meshCollider.transform, vertices[indices[i]]);
+            AppendWorldColliderVertex(output, meshCollider.transform, vertices[indices[i + 1]]);
+            AppendWorldColliderVertex(output, meshCollider.transform, vertices[indices[i + 2]]);
+        }
+
+        return output.ToArray();
+    }
+
+    private static void AppendWorldColliderVertex(List<float> output, Transform transform, Vector3 local)
+    {
+        Vector3 world = transform.TransformPoint(local);
+        output.Add(world.x);
+        output.Add(world.y);
+        output.Add(-world.z);
+    }
+
+    private static void WriteObj(Mesh mesh, string path)
     {
         var sb = new StringBuilder();
         sb.AppendLine("# Exported by SpatialThreePhysicalExporter");
@@ -1141,6 +1184,8 @@ public static class SpatialThreePhysicalExporter
         public int direction;
         public string meshName;
         public bool convex;
+        public int triangleCount;
+        public float[] triangles;
     }
 }
 
