@@ -303,13 +303,16 @@ function populateMetadataPanel(metadata) {
   const stats = metadata.stats || {};
   const webxr = metadata.webxr || {};
   const interactions = webxr.interactions || {};
+  const runtimeSummary = state.runtime?.summary || {};
+  const totalAnimations = (runtimeSummary.loopRotations || stats.loopRotations || 0) + (runtimeSummary.transformAnimations || stats.transformAnimations || 0);
+  const appliedAnimations = (runtimeSummary.loopRotations || stats.loopRotations || 0) + (runtimeSummary.appliedTransformAnimations || 0);
   const entries = [
     ["Colliders", stats.colliders],
     ["Materials", stats.materials],
     ["Textures", stats.texturedMaterials],
     ["Lights", stats.lights],
     ["Entrances", stats.entrancePoints],
-    ["Animations", (stats.loopRotations || 0) + (stats.transformAnimations || 0)],
+    ["Animations", `${appliedAnimations}/${totalAnimations}`],
     ["Teleport", (interactions.teleport || []).length],
     ["Triggers", (interactions.triggers || []).length],
   ];

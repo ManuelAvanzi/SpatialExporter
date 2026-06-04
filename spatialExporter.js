@@ -142,7 +142,6 @@ function readJsonFile(file) {
 function buildSpatialScene(raw, context) {
   const materials = new Map();
   const entrancePoints = buildEntrancePoints(raw.entrancePoints || []);
-  const behaviours = buildBehaviours(raw.behaviours || {});
   const nodes = (raw.objects || []).map((object, index) => {
     const materialIds = (object.materials || []).map((material) => registerMaterial(materials, material));
     return {
@@ -163,6 +162,7 @@ function buildSpatialScene(raw, context) {
       flags: nodeFlags(object),
     };
   });
+  const behaviours = buildBehaviours(raw.behaviours || {}, nodes);
   const colliderCount = nodes.reduce((sum, node) => sum + node.colliders.length, 0);
   const triggerColliderCount = nodes.reduce((sum, node) => sum + node.colliders.filter((collider) => collider.isTrigger).length, 0);
   const texturedMaterials = [...materials.values()].filter((material) => material.texture || material.normalTexture).length;
@@ -236,7 +236,7 @@ function buildEntrancePoints(points) {
   }));
 }
 
-function buildBehaviours(rawBehaviours) {
+function buildBehaviours(rawBehaviours, nodes = []) {
   const animators = (rawBehaviours.animators || []).map((animator, index) => ({
     id: `animator_${String(index).padStart(3, "0")}`,
     name: animator.name || "",
@@ -271,7 +271,7 @@ function buildBehaviours(rawBehaviours) {
     degreesPerSecond: roundNumber(rotation.degreesPerSecond || 0),
     duration: roundNumber(rotation.duration || 0),
   })).filter((rotation) => rotation.targetPath && rotation.axis && Math.abs(rotation.degreesPerSecond) > 0.001);
-  const transformAnimations = buildTransformAnimations(animators);
+  const transformAnimations = buildTransformAnimations(animators, nodes);
 
   return {
     animators,
@@ -281,7 +281,7 @@ function buildBehaviours(rawBehaviours) {
   };
 }
 
-function buildTransformAnimations(animators) {
+function buildTransformAnimations(animators, nodes) {
   const animations = [];
   for (const animator of animators) {
     for (const clip of animator.clips || []) {
@@ -290,12 +290,16 @@ function buildTransformAnimations(animators) {
         if (!axis) continue;
         const delta = (Number(binding.lastValue) || 0) - (Number(binding.firstValue) || 0);
         if (Math.abs(delta) < 0.5) continue;
+        const targetPath = combinePath(animator.path, binding.path);
+        const matchedPaths = matchingNodePaths(nodes, targetPath);
         animations.push({
           id: `transform_animation_${String(animations.length).padStart(3, "0")}`,
           animatorId: animator.id,
           animatorPath: animator.path,
           clipName: clip.name || "",
-          targetPath: combinePath(animator.path, binding.path),
+          targetPath,
+          matchedPaths,
+          applied: matchedPaths.length > 0,
           property: "rotation",
           axis,
           fromDegrees: roundNumber(binding.firstValue || 0),
@@ -308,6 +312,13 @@ function buildTransformAnimations(animators) {
     }
   }
   return animations;
+}
+
+function matchingNodePaths(nodes, targetPath) {
+  if (!targetPath) return [];
+  return nodes
+    .filter((node) => node.path === targetPath || node.path.startsWith(`${targetPath}/`))
+    .map((node) => node.path);
 }
 
 function normalizeEulerProperty(propertyName) {
@@ -447,6 +458,7 @@ function buildWebXrRuntime(spatialScene) {
       animators: spatialScene.stats?.animators || 0,
       loopRotations: behaviours.loopRotations?.length || 0,
       transformAnimations: behaviours.transformAnimations?.length || 0,
+      appliedTransformAnimations: (behaviours.transformAnimations || []).filter((animation) => animation.applied).length,
     },
     navigation: {
       entrancePoints,
@@ -510,6 +522,8 @@ function runtimeTransformAnimations(transformAnimations) {
     animatorPath: animation.animatorPath || "",
     clipName: animation.clipName || "",
     targetPath: animation.targetPath || "",
+    matchedPaths: animation.matchedPaths || [],
+    applied: Boolean(animation.applied),
     property: animation.property || "rotation",
     axis: animation.axis,
     fromRadians: roundNumber((animation.fromDegrees || 0) * Math.PI / 180 * axisHandedness(animation.axis)),

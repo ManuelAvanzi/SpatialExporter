@@ -70,6 +70,7 @@ public static class SpatialThreePhysicalExporter
         {
             Traverse(root.transform, export.objects, meshDir, textureDir, ref meshIndex);
         }
+        ExportAnimatedRenderers(scene, export.objects, meshDir, textureDir, ref meshIndex);
 
         string json = JsonUtility.ToJson(export, true);
         File.WriteAllText(Path.Combine(exportRoot, "scene.json"), json, Encoding.UTF8);
@@ -367,6 +368,75 @@ public static class SpatialThreePhysicalExporter
         {
             Traverse(transform.GetChild(i), objects, meshDir, textureDir, ref meshIndex);
         }
+    }
+
+    private static void ExportAnimatedRenderers(Scene scene, List<PhysicalObjectExport> objects, string meshDir, string textureDir, ref int meshIndex)
+    {
+        foreach (GameObject root in scene.GetRootGameObjects())
+        {
+            Animator[] animators = root.GetComponentsInChildren<Animator>(true);
+            foreach (Animator animator in animators)
+            {
+                if (animator == null || !animator.enabled)
+                {
+                    continue;
+                }
+
+                MeshRenderer[] meshRenderers = animator.GetComponentsInChildren<MeshRenderer>(true);
+                foreach (MeshRenderer renderer in meshRenderers)
+                {
+                    MeshFilter meshFilter = renderer.GetComponent<MeshFilter>();
+                    if (meshFilter == null || meshFilter.sharedMesh == null || !renderer.enabled || AlreadyExported(objects, renderer.gameObject))
+                    {
+                        continue;
+                    }
+
+                    string meshName = SanitizeFileName($"{meshIndex:0000}_{renderer.gameObject.name}_animated");
+                    string relativeMeshPath = $"meshes/{meshName}.obj";
+                    WriteObj(meshFilter.sharedMesh, Path.Combine(meshDir, meshName + ".obj"));
+                    objects.Add(CreateObjectExport(renderer.gameObject, "AnimatedMeshRenderer", relativeMeshPath, renderer.sharedMaterials, GetEnabledColliders(renderer.gameObject), textureDir));
+                    meshIndex++;
+                }
+
+                SkinnedMeshRenderer[] skinnedRenderers = animator.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+                foreach (SkinnedMeshRenderer renderer in skinnedRenderers)
+                {
+                    if (renderer.sharedMesh == null || !renderer.enabled || AlreadyExported(objects, renderer.gameObject))
+                    {
+                        continue;
+                    }
+
+                    Mesh baked = new Mesh();
+                    try
+                    {
+                        renderer.BakeMesh(baked);
+                        string meshName = SanitizeFileName($"{meshIndex:0000}_{renderer.gameObject.name}_animated_skinned");
+                        string relativeMeshPath = $"meshes/{meshName}.obj";
+                        WriteObj(baked, Path.Combine(meshDir, meshName + ".obj"));
+                        objects.Add(CreateObjectExport(renderer.gameObject, "AnimatedSkinnedMeshRenderer", relativeMeshPath, renderer.sharedMaterials, GetEnabledColliders(renderer.gameObject), textureDir));
+                        meshIndex++;
+                    }
+                    finally
+                    {
+                        UnityEngine.Object.DestroyImmediate(baked);
+                    }
+                }
+            }
+        }
+    }
+
+    private static bool AlreadyExported(List<PhysicalObjectExport> objects, GameObject go)
+    {
+        string path = GetHierarchyPath(go.transform);
+        foreach (PhysicalObjectExport item in objects)
+        {
+            if (string.Equals(item.hierarchyPath, path, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void ExportMeshFilter(GameObject go, List<PhysicalObjectExport> objects, string meshDir, string textureDir, ref int meshIndex)
