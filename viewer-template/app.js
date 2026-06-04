@@ -792,7 +792,7 @@ function updatePlayer(dt) {
   if (!state.player.enabled) return;
 
   const forward = [Math.sin(state.player.yaw), 0, Math.cos(state.player.yaw)];
-  const right = [Math.cos(state.player.yaw), 0, -Math.sin(state.player.yaw)];
+  const right = [-Math.cos(state.player.yaw), 0, Math.sin(state.player.yaw)];
   let moveX = 0;
   let moveZ = 0;
   if (state.keys.has("KeyW") || state.keys.has("ArrowUp")) { moveX += forward[0]; moveZ += forward[2]; }
