@@ -63,6 +63,7 @@ const state = {
     height: 1.7,
     radius: 0.28,
     speed: 6.5,
+    sprintMultiplier: 1.65,
     grounded: false,
     jumpsUsed: 0,
     maxJumps: 2,
@@ -800,8 +801,10 @@ function updatePlayer(dt) {
   if (state.keys.has("KeyD") || state.keys.has("ArrowRight")) { moveX += right[0]; moveZ += right[2]; }
   if (state.keys.has("KeyA") || state.keys.has("ArrowLeft")) { moveX -= right[0]; moveZ -= right[2]; }
   const len = Math.hypot(moveX, moveZ) || 1;
-  moveX = moveX / len * state.player.speed * dt;
-  moveZ = moveZ / len * state.player.speed * dt;
+  const sprinting = state.keys.has("ShiftLeft") || state.keys.has("ShiftRight");
+  const speed = state.player.speed * (sprinting ? state.player.sprintMultiplier : 1);
+  moveX = moveX / len * speed * dt;
+  moveZ = moveZ / len * speed * dt;
 
   state.player.velocityY -= 9.81 * dt;
   const next = [...state.player.position];
@@ -912,7 +915,8 @@ function updatePlayerReadout() {
   }
   const p = state.player.position.map((value) => value.toFixed(1));
   const jumpText = state.player.grounded ? "grounded" : `air ${state.player.jumpsUsed}/${state.player.maxJumps}`;
-  ui.playerPosition.textContent = `player ${p[0]}, ${p[1]}, ${p[2]} ${jumpText}`;
+  const speedText = (state.keys.has("ShiftLeft") || state.keys.has("ShiftRight")) ? "run" : "walk";
+  ui.playerPosition.textContent = `player ${p[0]}, ${p[1]}, ${p[2]} ${jumpText} ${speedText}`;
 }
 
 function robustCameraMeshes(meshes) {
@@ -1332,7 +1336,7 @@ function movementCode(event) {
 
 window.addEventListener("keydown", (event) => {
   const code = movementCode(event);
-  if (["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(code)) {
+  if (["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space", "ShiftLeft", "ShiftRight"].includes(code)) {
     if (code === "Space" && !state.keys.has("Space")) jumpPlayer();
     state.keys.add(code);
     if (state.player.enabled) event.preventDefault();
