@@ -64,6 +64,10 @@ const state = {
     radius: 0.28,
     speed: 6.5,
     grounded: false,
+    jumpsUsed: 0,
+    maxJumps: 2,
+    jumpSpeed: 5.2,
+    respawnY: -30,
   },
   keys: new Set(),
   lastFrameTime: performance.now() * 0.001,
@@ -699,6 +703,7 @@ function resetPlayerToSpawn() {
   ];
   state.player.velocityY = 0;
   state.player.grounded = false;
+  state.player.jumpsUsed = 0;
   const yawDegrees = Array.isArray(spawn?.rotationEuler) ? Number(spawn.rotationEuler[1]) || 0 : 0;
   state.player.yaw = yawDegrees * Math.PI / 180;
   state.player.pitch = 0;
@@ -798,10 +803,6 @@ function updatePlayer(dt) {
   moveX = moveX / len * state.player.speed * dt;
   moveZ = moveZ / len * state.player.speed * dt;
 
-  if (state.keys.has("Space") && state.player.grounded) {
-    state.player.velocityY = 5.2;
-    state.player.grounded = false;
-  }
   state.player.velocityY -= 9.81 * dt;
   const next = [...state.player.position];
   movePlayerAxis(next, 0, moveX);
@@ -809,8 +810,21 @@ function updatePlayer(dt) {
   movePlayerAxis(next, 1, state.player.velocityY * dt);
   snapPlayerToGround(next);
   state.player.position = next;
+  if (state.player.position[1] < state.player.respawnY) {
+    resetPlayerToSpawn();
+    if (ui.runtimeStatus) ui.runtimeStatus.textContent = "respawn";
+  }
   updateInteractions();
   updatePlayerReadout();
+}
+
+function jumpPlayer() {
+  if (!state.player.enabled) return;
+  if (state.player.grounded) state.player.jumpsUsed = 0;
+  if (state.player.jumpsUsed >= state.player.maxJumps) return;
+  state.player.velocityY = state.player.jumpSpeed;
+  state.player.grounded = false;
+  state.player.jumpsUsed += 1;
 }
 
 function movePlayerAxis(position, axis, delta) {
@@ -822,6 +836,7 @@ function movePlayerAxis(position, axis, delta) {
     if (axis === 1 && delta < 0) {
       state.player.velocityY = 0;
       state.player.grounded = true;
+      state.player.jumpsUsed = 0;
     }
   }
 }
@@ -839,6 +854,7 @@ function snapPlayerToGround(position) {
     position[1] = bestY + state.player.height * 0.5;
     state.player.velocityY = 0;
     state.player.grounded = true;
+    state.player.jumpsUsed = 0;
   } else {
     state.player.grounded = false;
   }
@@ -891,7 +907,8 @@ function updatePlayerReadout() {
     return;
   }
   const p = state.player.position.map((value) => value.toFixed(1));
-  ui.playerPosition.textContent = `player ${p[0]}, ${p[1]}, ${p[2]} ${state.player.grounded ? "grounded" : "air"}`;
+  const jumpText = state.player.grounded ? "grounded" : `air ${state.player.jumpsUsed}/${state.player.maxJumps}`;
+  ui.playerPosition.textContent = `player ${p[0]}, ${p[1]}, ${p[2]} ${jumpText}`;
 }
 
 function robustCameraMeshes(meshes) {
@@ -1306,6 +1323,7 @@ canvas.addEventListener("wheel", (event) => {
 
 window.addEventListener("keydown", (event) => {
   if (["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(event.code)) {
+    if (event.code === "Space" && !state.keys.has("Space")) jumpPlayer();
     state.keys.add(event.code);
     if (state.player.enabled) event.preventDefault();
   }
