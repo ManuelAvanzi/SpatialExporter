@@ -6,6 +6,7 @@ const skyCtx = skyCanvas.getContext("2d");
 const textureCache = new Map();
 const normalMapExt = gl.getExtension("OES_standard_derivatives");
 const MAX_LIGHTS = 4;
+const PHYSICS_OVERRIDE_STORAGE = "spatialExporter.physicsOverrides.v1";
 
 if (!gl) {
   document.body.innerHTML = "<p style='padding:24px'>WebGL non disponibile su questo browser.</p>";
@@ -29,6 +30,9 @@ const ui = {
   runtimeStatus: document.getElementById("runtimeStatus"),
   playerPosition: document.getElementById("playerPosition"),
   interactionStatus: document.getElementById("interactionStatus"),
+  physicsEditorStatus: document.getElementById("physicsEditorStatus"),
+  physicsEditorReadout: document.getElementById("physicsEditorReadout"),
+  physicsOverrideButtons: Array.from(document.querySelectorAll("[data-physics-mode]")),
   resetView: document.getElementById("resetView"),
   toggleWire: document.getElementById("toggleWire"),
   toggleCull: document.getElementById("toggleCull"),
@@ -58,6 +62,7 @@ const state = {
   selectedObjectPath: "",
   selectedObjectBounds: null,
   selectedRuntimeNodes: [],
+  physicsOverrides: loadPhysicsOverrides(),
   player: {
     enabled: false,
     thirdPerson: false,
@@ -326,6 +331,7 @@ function selectObject(item) {
   state.selectedRuntimeNodes = runtimeNodesForObject(item);
   state.runtimeLineCache = null;
   populateObjectList(state.allObjects);
+  updatePhysicsEditor(item);
   focusSelectedObject(item);
   if (ui.runtimeStatus) {
     const colliderCount = state.selectedRuntimeNodes.reduce((sum, node) => sum + (node.colliders || []).length, 0);
@@ -367,6 +373,59 @@ function boundsForObject(item) {
   const path = item.hierarchyPath || item.name || "";
   const mesh = state.meshes.find((candidate) => candidate.path === path || candidate.name === item.name);
   return mesh?.bounds || null;
+}
+
+function selectedObject() {
+  if (!state.selectedObjectPath) return null;
+  return state.allObjects.find((item) => (item.hierarchyPath || item.name || "") === state.selectedObjectPath) || null;
+}
+
+function physicsKeyForItem(item) {
+  return item?.mesh || item?.hierarchyPath || item?.path || item?.name || "";
+}
+
+function physicsModeForKey(key) {
+  return state.physicsOverrides[key] || "auto";
+}
+
+function effectivePhysicsModeForMesh(mesh) {
+  const override = physicsModeForKey(mesh.sourceMesh || mesh.path || mesh.name);
+  return override === "auto" ? "walkable" : override;
+}
+
+function updatePhysicsEditor(item = selectedObject()) {
+  const key = physicsKeyForItem(item);
+  const mode = key ? physicsModeForKey(key) : "auto";
+  const mesh = key ? state.meshes.find((candidate) => candidate.sourceMesh === item?.mesh || candidate.path === (item?.hierarchyPath || item?.name || "")) : null;
+  ui.physicsOverrideButtons.forEach((button) => {
+    button.disabled = !key;
+    button.classList.toggle("is-active", button.dataset.physicsMode === mode);
+  });
+  if (ui.physicsEditorStatus) ui.physicsEditorStatus.textContent = key ? mode : "select object";
+  if (ui.physicsEditorReadout) {
+    if (!key) {
+      ui.physicsEditorReadout.textContent = "no selection";
+    } else {
+      const tris = mesh?.collisionTriangles?.length ? Math.floor(mesh.collisionTriangles.length / 9) : 0;
+      ui.physicsEditorReadout.textContent = `${item.name || "object"} · ${mesh ? `${tris} mesh triangles` : "no visual mesh"} · ${mode}`;
+    }
+  }
+}
+
+function setSelectedPhysicsMode(mode) {
+  const item = selectedObject();
+  const key = physicsKeyForItem(item);
+  if (!key) return;
+  if (mode === "auto") {
+    delete state.physicsOverrides[key];
+  } else {
+    state.physicsOverrides[key] = mode;
+  }
+  savePhysicsOverrides();
+  state.runtimeLineCache = null;
+  updatePhysicsEditor(item);
+  populateObjectList(state.allObjects);
+  if (ui.runtimeStatus) ui.runtimeStatus.textContent = `collider: ${mode}`;
 }
 
 function filterObjects(items) {
@@ -430,6 +489,8 @@ function semanticToken(meta, item) {
 }
 
 function semanticLabel(meta, item) {
+  const override = physicsModeForKey(physicsKeyForItem(item));
+  if (override !== "auto") return override;
   const labels = {
     mesh: "mesh",
     teleport: "teleport",
@@ -1007,20 +1068,32 @@ function snapPlayerToGround(position) {
 }
 
 function playerCollision(position) {
-  // Mesh-only collider mode: surfaces drive grounding, so old AABB wall blocking is disabled.
-  // This avoids invisible Unity BoxCollider volumes stopping ramps and curved walkable meshes.
+  const minY = position[1] - state.player.height * 0.5;
+  const maxY = position[1] + state.player.height * 0.5;
+  for (const item of solidColliders()) {
+    if (item.physicsMode !== "solid") continue;
+    const b = item.bounds;
+    if (!b?.min || !b?.max) continue;
+    if (maxY <= b.min[1] || minY >= b.max[1]) continue;
+    if (circleOverlapsAabb(position[0], position[2], state.player.radius, b.min[0], b.max[0], b.min[2], b.max[2])) {
+      return item;
+    }
+  }
   return null;
 }
 
 function solidColliders() {
   return state.meshes
-    .filter((mesh) => mesh.bounds?.min && mesh.bounds?.max && mesh.collisionTriangles?.length)
-    .map((mesh) => ({
+    .map((mesh) => ({ mesh, physicsMode: effectivePhysicsModeForMesh(mesh) }))
+    .filter(({ mesh, physicsMode }) => mesh.bounds?.min && mesh.bounds?.max && physicsMode !== "none" && physicsMode !== "trigger")
+    .filter(({ mesh, physicsMode }) => physicsMode === "solid" || mesh.collisionTriangles?.length)
+    .map(({ mesh, physicsMode }) => ({
       name: mesh.name,
       path: mesh.path,
       mesh: mesh.sourceMesh,
       bounds: mesh.bounds,
-      collisionTriangles: mesh.collisionTriangles,
+      collisionTriangles: physicsMode === "solid" ? [] : mesh.collisionTriangles,
+      physicsMode,
     }));
 }
 
@@ -1030,6 +1103,7 @@ function isRampCollider(item) {
 }
 
 function colliderSurfaceY(item, position) {
+  if (item.physicsMode === "solid") return null;
   let bestY = colliderTriangleSurfaceYAt(item, position[0], position[2]);
   const radius = state.player.radius * 0.85;
   const probes = [
@@ -1509,6 +1583,8 @@ function selectedTriangleLines() {
 function meshColliderDebugLines() {
   const points = [];
   for (const mesh of state.meshes) {
+    const mode = effectivePhysicsModeForMesh(mesh);
+    if (mode === "none" || mode === "trigger" || mode === "solid") continue;
     const triangles = mesh.collisionTriangles || [];
     const stride = Math.max(9, Math.ceil(triangles.length / (9 * 36)) * 9);
     for (let i = 0; i + 8 < triangles.length; i += stride) {
@@ -1702,6 +1778,9 @@ if (ui.togglePlayer) {
 if (ui.toggleThirdPerson) {
   ui.toggleThirdPerson.addEventListener("click", toggleThirdPersonMode);
 }
+ui.physicsOverrideButtons.forEach((button) => {
+  button.addEventListener("click", () => setSelectedPhysicsMode(button.dataset.physicsMode || "auto"));
+});
 ui.runtimeDebugButtons.forEach((button) => {
   const key = button.dataset.debug;
   button.classList.toggle("is-active", Boolean(state.runtimeDebug[key]));
@@ -1822,6 +1901,19 @@ async function fetchOptionalJson(url) {
 }
 async function fetchText(url) { return (await fetch(url)).text(); }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+
+function loadPhysicsOverrides() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PHYSICS_OVERRIDE_STORAGE) || "{}");
+    return saved && typeof saved === "object" ? saved : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function savePhysicsOverrides() {
+  localStorage.setItem(PHYSICS_OVERRIDE_STORAGE, JSON.stringify(state.physicsOverrides));
+}
 
 function resizeCanvas() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);

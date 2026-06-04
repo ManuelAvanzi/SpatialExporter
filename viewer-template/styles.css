@@ -259,6 +259,40 @@ button:hover { background: linear-gradient(180deg, rgba(143,208,200,0.18), rgba(
   white-space: nowrap;
 }
 
+.physics-editor {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(143, 208, 200, 0.16);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(143,208,200,0.07), rgba(0,0,0,0.12));
+}
+
+.override-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+
+.override-grid button {
+  min-height: 30px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.override-grid button[data-physics-mode="walkable"].is-active { border-color: rgba(120, 232, 205, 0.72); color: #d7fff7; }
+.override-grid button[data-physics-mode="solid"].is-active { border-color: rgba(168, 199, 255, 0.72); color: #e6efff; }
+.override-grid button[data-physics-mode="none"].is-active { border-color: rgba(255, 154, 162, 0.72); color: #ffe7e9; }
+.override-grid button[data-physics-mode="trigger"].is-active { border-color: rgba(241, 194, 125, 0.78); color: #fff2d8; }
+.override-grid button.is-active {
+  background: linear-gradient(180deg, rgba(143,208,200,0.24), rgba(173,84,199,0.1));
+}
+
+.physics-readout {
+  padding: 7px 8px;
+  font-size: 10px;
+}
+
 .filter-button,
 .debug-button {
   min-height: 29px;

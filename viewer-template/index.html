@@ -81,6 +81,19 @@
           <span id="playerPosition">player offline</span>
           <span id="interactionStatus">no interaction</span>
         </div>
+        <section class="physics-editor" aria-label="Collider override editor">
+          <div class="section-title"><h2>Collider override</h2><span id="physicsEditorStatus">select object</span></div>
+          <div class="override-grid" id="physicsOverrideButtons" role="group" aria-label="Selected object collision mode">
+            <button type="button" data-physics-mode="auto">Auto</button>
+            <button type="button" data-physics-mode="walkable">Walkable</button>
+            <button type="button" data-physics-mode="solid">Solid</button>
+            <button type="button" data-physics-mode="none">No collider</button>
+            <button type="button" data-physics-mode="trigger">Trigger</button>
+          </div>
+          <div class="runtime-readout physics-readout">
+            <span id="physicsEditorReadout">no selection</span>
+          </div>
+        </section>
         <div class="filter-bar" role="group" aria-label="Object filters">
           <button class="filter-button is-active" type="button" data-filter="all">All</button>
           <button class="filter-button" type="button" data-filter="mesh">Mesh</button>
