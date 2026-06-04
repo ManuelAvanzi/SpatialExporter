@@ -10,6 +10,7 @@ html, body { margin: 0; min-height: 100%; overflow: hidden; }
 button, input { font: inherit; }
 
 .shell {
+  position: relative;
   width: 100vw;
   height: 100vh;
   display: grid;
@@ -24,6 +25,54 @@ button, input { font: inherit; }
   cursor: grab;
 }
 #viewport:active { cursor: grabbing; }
+
+.player-hands {
+  position: fixed;
+  left: 0;
+  right: 384px;
+  bottom: 0;
+  height: 180px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(22px);
+  transition: opacity 140ms ease, transform 140ms ease;
+  z-index: 2;
+}
+
+body.player-active .player-hands {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.hand {
+  position: absolute;
+  bottom: 18px;
+  width: 92px;
+  height: 118px;
+  border: 2px solid rgba(158, 226, 216, 0.72);
+  border-radius: 44px 44px 28px 28px;
+  background:
+    radial-gradient(circle at 42% 28%, rgba(255,255,255,0.36), transparent 18%),
+    linear-gradient(180deg, rgba(202, 176, 132, 0.82), rgba(116, 76, 52, 0.78));
+  box-shadow: 0 18px 42px rgba(0,0,0,0.34), inset 0 -20px 34px rgba(0,0,0,0.18);
+}
+
+.hand::before,
+.hand::after {
+  content: "";
+  position: absolute;
+  top: -14px;
+  width: 20px;
+  height: 48px;
+  border-radius: 18px;
+  border: 2px solid rgba(158, 226, 216, 0.5);
+  background: rgba(198, 160, 105, 0.82);
+}
+
+.hand::before { left: 22px; }
+.hand::after { right: 22px; }
+.left-hand { left: max(34px, 13vw); transform: rotate(10deg); }
+.right-hand { right: max(34px, 13vw); transform: rotate(-10deg); }
 
 .panel {
   height: 100vh;

@@ -28,6 +28,7 @@ const ui = {
   runtimeStatus: document.getElementById("runtimeStatus"),
   playerPosition: document.getElementById("playerPosition"),
   interactionStatus: document.getElementById("interactionStatus"),
+  playerHands: document.getElementById("playerHands"),
   resetView: document.getElementById("resetView"),
   toggleWire: document.getElementById("toggleWire"),
   toggleCull: document.getElementById("toggleCull"),
@@ -697,7 +698,7 @@ function resetPlayerToSpawn() {
   const rig = state.runtime?.player?.rig || state.runtime?.navigation?.defaultRig || {};
   const position = Array.isArray(spawn?.position) ? spawn.position : [0, 1.7, 0];
   state.player.height = Number(rig.height) || 1.7;
-  state.player.radius = Number(rig.radius) || 0.28;
+  state.player.radius = clamp(Number(rig.radius) || 0.22, 0.14, 0.22);
   state.player.position = [
     Number(position[0]) || 0,
     (Number(position[1]) || 0) + state.player.height * 0.5,
@@ -754,8 +755,8 @@ function togglePlayerMode() {
     if (ui.runtimeStatus) ui.runtimeStatus.textContent = "player mode";
   } else if (ui.runtimeStatus) {
     ui.runtimeStatus.textContent = "orbit mode";
-    if (document.pointerLockElement === canvas) document.exitPointerLock();
   }
+  document.body.classList.toggle("player-active", state.player.enabled);
   if (ui.togglePlayer) ui.togglePlayer.classList.toggle("is-active", state.player.enabled);
   updatePlayerReadout();
 }
@@ -869,9 +870,10 @@ function snapPlayerToGround(position) {
     const b = item.bounds;
     if (!b?.min || !b?.max) continue;
     if (!circleOverlapsAabb(position[0], position[2], state.player.radius, b.min[0], b.max[0], b.min[2], b.max[2])) continue;
-    if (b.max[1] <= feetY + 0.28 && b.max[1] > bestY) bestY = b.max[1];
+    const groundY = rampSurfaceY(item, position) ?? b.max[1];
+    if (groundY <= feetY + state.player.stepHeight + 0.18 && groundY > bestY) bestY = groundY;
   }
-  if (Number.isFinite(bestY) && feetY - bestY < 0.28 && feetY - bestY > -0.08) {
+  if (Number.isFinite(bestY) && feetY - bestY < state.player.stepHeight + 0.18 && feetY - bestY > -0.16) {
     position[1] = bestY + state.player.height * 0.5;
     state.player.velocityY = 0;
     state.player.grounded = true;
@@ -887,6 +889,7 @@ function playerCollision(position) {
   for (const item of solidColliders()) {
     const b = item.bounds;
     if (!b?.min || !b?.max) continue;
+    if (isRampCollider(item)) continue;
     if (maxY <= b.min[1] || minY >= b.max[1]) continue;
     if (circleOverlapsAabb(position[0], position[2], state.player.radius, b.min[0], b.max[0], b.min[2], b.max[2])) {
       return item;
@@ -902,6 +905,25 @@ function solidColliders() {
     if (!colliders.length) return true;
     return colliders.some((collider) => collider.enabled !== false && !collider.isTrigger);
   });
+}
+
+function isRampCollider(item) {
+  const text = `${item.name || ""} ${item.path || ""}`.toLowerCase();
+  return text.includes("scala") || text.includes("ramp") || text.includes("stairs");
+}
+
+function rampSurfaceY(item, position) {
+  if (!isRampCollider(item)) return null;
+  const b = item.bounds;
+  if (!b?.min || !b?.max) return null;
+  const spanX = Math.abs(b.max[0] - b.min[0]);
+  const spanZ = Math.abs(b.max[2] - b.min[2]);
+  const spanY = Math.abs(b.max[1] - b.min[1]);
+  if (spanY < 0.1) return b.max[1];
+  const t = spanX >= spanZ
+    ? clamp((position[0] - b.min[0]) / Math.max(spanX, 0.001), 0, 1)
+    : clamp((position[2] - b.min[2]) / Math.max(spanZ, 0.001), 0, 1);
+  return b.min[1] + t * spanY;
 }
 
 function circleOverlapsAabb(x, z, radius, minX, maxX, minZ, maxZ) {
@@ -1325,18 +1347,14 @@ function orbitEye() {
 }
 
 canvas.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) return;
   state.dragging = true;
   state.pointerLook = state.player.enabled;
   state.lastX = event.clientX;
   state.lastY = event.clientY;
-  if (state.player.enabled && document.pointerLockElement !== canvas) {
-    canvas.requestPointerLock?.();
-  } else {
-    canvas.setPointerCapture(event.pointerId);
-  }
+  canvas.setPointerCapture(event.pointerId);
 });
 canvas.addEventListener("pointermove", (event) => {
-  if (document.pointerLockElement === canvas) return;
   if (!state.dragging) return;
   const dx = event.clientX - state.lastX;
   const dy = event.clientY - state.lastY;
@@ -1350,29 +1368,14 @@ canvas.addEventListener("pointermove", (event) => {
   }
 });
 canvas.addEventListener("pointerup", () => {
-  if (document.pointerLockElement !== canvas) {
-    state.dragging = false;
-    state.pointerLook = false;
-  }
+  state.dragging = false;
+  state.pointerLook = false;
 });
 canvas.addEventListener("wheel", (event) => {
   event.preventDefault();
   if (state.player.enabled) return;
   state.distance = clamp(state.distance * (event.deltaY > 0 ? 1.08 : 0.92), 4, 2500);
 }, { passive: false });
-
-document.addEventListener("mousemove", (event) => {
-  if (document.pointerLockElement === canvas && state.player.enabled) {
-    applyPlayerLook(event.movementX || 0, event.movementY || 0);
-  }
-});
-
-document.addEventListener("pointerlockchange", () => {
-  const locked = document.pointerLockElement === canvas;
-  state.dragging = locked;
-  state.pointerLook = locked && state.player.enabled;
-  if (ui.runtimeStatus && state.player.enabled) ui.runtimeStatus.textContent = locked ? "player locked" : "player mode";
-});
 
 function applyPlayerLook(dx, dy) {
   state.player.yaw -= dx * 0.006;
