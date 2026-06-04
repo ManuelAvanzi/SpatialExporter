@@ -293,6 +293,22 @@ button:hover { background: linear-gradient(180deg, rgba(143,208,200,0.18), rgba(
   font-size: 10px;
 }
 
+.map-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.map-actions button {
+  min-height: 29px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+.map-actions input {
+  display: none;
+}
+
 .filter-button,
 .debug-button {
   min-height: 29px;

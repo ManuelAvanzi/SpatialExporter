@@ -7,6 +7,7 @@ const textureCache = new Map();
 const normalMapExt = gl.getExtension("OES_standard_derivatives");
 const MAX_LIGHTS = 4;
 const PHYSICS_OVERRIDE_STORAGE = "spatialExporter.physicsOverrides.v1";
+const PHYSICS_MODES = new Set(["auto", "walkable", "solid", "none", "trigger"]);
 
 if (!gl) {
   document.body.innerHTML = "<p style='padding:24px'>WebGL non disponibile su questo browser.</p>";
@@ -33,6 +34,10 @@ const ui = {
   physicsEditorStatus: document.getElementById("physicsEditorStatus"),
   physicsEditorReadout: document.getElementById("physicsEditorReadout"),
   physicsOverrideButtons: Array.from(document.querySelectorAll("[data-physics-mode]")),
+  savePhysicalMap: document.getElementById("savePhysicalMap"),
+  loadPhysicalMap: document.getElementById("loadPhysicalMap"),
+  clearPhysicalMap: document.getElementById("clearPhysicalMap"),
+  physicalMapFile: document.getElementById("physicalMapFile"),
   resetView: document.getElementById("resetView"),
   toggleWire: document.getElementById("toggleWire"),
   toggleCull: document.getElementById("toggleCull"),
@@ -407,7 +412,7 @@ function updatePhysicsEditor(item = selectedObject()) {
       ui.physicsEditorReadout.textContent = "no selection";
     } else {
       const tris = mesh?.collisionTriangles?.length ? Math.floor(mesh.collisionTriangles.length / 9) : 0;
-      ui.physicsEditorReadout.textContent = `${item.name || "object"} · ${mesh ? `${tris} mesh triangles` : "no visual mesh"} · ${mode}`;
+      ui.physicsEditorReadout.textContent = `${item.name || "object"} - ${mesh ? `${tris} mesh triangles` : "no visual mesh"} - ${mode}`;
     }
   }
 }
@@ -426,6 +431,55 @@ function setSelectedPhysicsMode(mode) {
   updatePhysicsEditor(item);
   populateObjectList(state.allObjects);
   if (ui.runtimeStatus) ui.runtimeStatus.textContent = `collider: ${mode}`;
+}
+
+function physicalMapPayload() {
+  return {
+    version: 1,
+    kind: "spatialExporter.physicalMap",
+    scene: state.metadata?.scene || "BodyLab3_Scene",
+    createdAt: new Date().toISOString(),
+    overrides: { ...state.physicsOverrides },
+  };
+}
+
+function downloadPhysicalMap() {
+  const payload = physicalMapPayload();
+  const text = JSON.stringify(payload, null, 2);
+  const blob = new Blob([text], { type: "application/json" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `${payload.scene || "scene"}.physical-map.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(link.href);
+  if (ui.runtimeStatus) ui.runtimeStatus.textContent = `saved ${Object.keys(payload.overrides).length} overrides`;
+}
+
+function loadPhysicalMapFromText(text) {
+  const parsed = JSON.parse(text);
+  const source = parsed.overrides || parsed.physicsOverrides || parsed;
+  const next = {};
+  for (const [key, value] of Object.entries(source || {})) {
+    if (!key || !PHYSICS_MODES.has(value) || value === "auto") continue;
+    next[key] = value;
+  }
+  state.physicsOverrides = next;
+  savePhysicsOverrides();
+  state.runtimeLineCache = null;
+  updatePhysicsEditor();
+  populateObjectList(state.allObjects);
+  if (ui.runtimeStatus) ui.runtimeStatus.textContent = `loaded ${Object.keys(next).length} overrides`;
+}
+
+function clearPhysicalMap() {
+  state.physicsOverrides = {};
+  savePhysicsOverrides();
+  state.runtimeLineCache = null;
+  updatePhysicsEditor();
+  populateObjectList(state.allObjects);
+  if (ui.runtimeStatus) ui.runtimeStatus.textContent = "cleared physical map";
 }
 
 function filterObjects(items) {
@@ -1781,6 +1835,27 @@ if (ui.toggleThirdPerson) {
 ui.physicsOverrideButtons.forEach((button) => {
   button.addEventListener("click", () => setSelectedPhysicsMode(button.dataset.physicsMode || "auto"));
 });
+if (ui.savePhysicalMap) {
+  ui.savePhysicalMap.addEventListener("click", downloadPhysicalMap);
+}
+if (ui.loadPhysicalMap && ui.physicalMapFile) {
+  ui.loadPhysicalMap.addEventListener("click", () => ui.physicalMapFile.click());
+  ui.physicalMapFile.addEventListener("change", async () => {
+    const file = ui.physicalMapFile.files?.[0];
+    if (!file) return;
+    try {
+      loadPhysicalMapFromText(await file.text());
+    } catch (error) {
+      console.warn("Invalid physical map", error);
+      if (ui.runtimeStatus) ui.runtimeStatus.textContent = "invalid physical map";
+    } finally {
+      ui.physicalMapFile.value = "";
+    }
+  });
+}
+if (ui.clearPhysicalMap) {
+  ui.clearPhysicalMap.addEventListener("click", clearPhysicalMap);
+}
 ui.runtimeDebugButtons.forEach((button) => {
   const key = button.dataset.debug;
   button.classList.toggle("is-active", Boolean(state.runtimeDebug[key]));
