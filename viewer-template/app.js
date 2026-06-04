@@ -28,7 +28,6 @@ const ui = {
   runtimeStatus: document.getElementById("runtimeStatus"),
   playerPosition: document.getElementById("playerPosition"),
   interactionStatus: document.getElementById("interactionStatus"),
-  playerHands: document.getElementById("playerHands"),
   resetView: document.getElementById("resetView"),
   toggleWire: document.getElementById("toggleWire"),
   toggleCull: document.getElementById("toggleCull"),
@@ -756,7 +755,6 @@ function togglePlayerMode() {
   } else if (ui.runtimeStatus) {
     ui.runtimeStatus.textContent = "orbit mode";
   }
-  document.body.classList.toggle("player-active", state.player.enabled);
   if (ui.togglePlayer) ui.togglePlayer.classList.toggle("is-active", state.player.enabled);
   updatePlayerReadout();
 }
