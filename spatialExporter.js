@@ -147,16 +147,22 @@ function buildSpatialScene(raw, context) {
       id: `node_${String(index).padStart(4, "0")}`,
       name: object.name || "",
       path: object.hierarchyPath || object.name || "",
+      tag: object.tag || "",
+      layer: Number.isFinite(object.layer) ? object.layer : 0,
+      layerName: object.layerName || "",
+      isStatic: Boolean(object.isStatic),
       kind: classifyNode(object),
       sourceType: object.sourceType || "",
       mesh: object.mesh || "",
       materialIds,
       transform: object.transform || null,
       colliders: object.colliders || [],
+      rigidbody: normalizeRigidbody(object.rigidbody),
       flags: nodeFlags(object),
     };
   });
   const colliderCount = nodes.reduce((sum, node) => sum + node.colliders.length, 0);
+  const triggerColliderCount = nodes.reduce((sum, node) => sum + node.colliders.filter((collider) => collider.isTrigger).length, 0);
   const texturedMaterials = [...materials.values()].filter((material) => material.texture || material.normalTexture).length;
   return {
     schema: "spatialExporter.scene.v0",
@@ -173,6 +179,9 @@ function buildSpatialScene(raw, context) {
       nodes: nodes.length,
       meshes: nodes.filter((node) => Boolean(node.mesh)).length,
       colliders: colliderCount,
+      solidColliders: colliderCount - triggerColliderCount,
+      triggerColliders: triggerColliderCount,
+      rigidbodies: nodes.filter((node) => node.rigidbody?.hasRigidbody).length,
       materials: materials.size,
       texturedMaterials,
       lights: raw.lighting?.lights?.length || 0,
@@ -225,21 +234,43 @@ function findMaterialTexture(material, needles) {
 
 function classifyNode(object) {
   const text = `${object.hierarchyPath || ""} ${object.name || ""}`.toLowerCase();
+  const hasTriggerCollider = (object.colliders || []).some((collider) => collider?.isTrigger);
   if (text.includes("teleport")) return "teleportPhysical";
   if (text.includes("collectable") || text.includes("collectible")) return "collectiblePhysical";
-  if (text.includes("trigger")) return "triggerPhysical";
+  if (text.includes("trigger") || hasTriggerCollider) return "triggerPhysical";
   if (object.sourceType === "ColliderOnly") return "collider";
   return object.mesh ? "mesh" : "node";
 }
 
 function nodeFlags(object) {
   const text = `${object.hierarchyPath || ""} ${object.name || ""}`.toLowerCase();
+  const colliders = object.colliders || [];
+  const hasTriggerCollider = colliders.some((collider) => collider?.isTrigger);
+  const hasSolidCollider = colliders.some((collider) => !collider?.isTrigger);
   return {
     teleport: text.includes("teleport"),
-    trigger: text.includes("trigger"),
+    trigger: text.includes("trigger") || hasTriggerCollider,
     collectible: text.includes("collectable") || text.includes("collectible"),
     hasMesh: Boolean(object.mesh),
-    hasCollider: Boolean(object.colliders && object.colliders.length),
+    hasCollider: Boolean(colliders.length),
+    hasSolidCollider,
+    hasTriggerCollider,
+    hasRigidbody: Boolean(object.rigidbody?.hasRigidbody),
+  };
+}
+
+function normalizeRigidbody(rigidbody) {
+  if (!rigidbody || !rigidbody.hasRigidbody) return { hasRigidbody: false };
+  return {
+    hasRigidbody: true,
+    isKinematic: Boolean(rigidbody.isKinematic),
+    useGravity: Boolean(rigidbody.useGravity),
+    mass: Number(rigidbody.mass) || 0,
+    drag: Number(rigidbody.drag) || 0,
+    angularDrag: Number(rigidbody.angularDrag) || 0,
+    collisionDetectionMode: rigidbody.collisionDetectionMode || "",
+    interpolation: rigidbody.interpolation || "",
+    constraints: rigidbody.constraints || "",
   };
 }
 
@@ -257,8 +288,11 @@ function buildWebXrRuntime(spatialScene) {
   const triggers = nodes.filter((node) => node.flags?.trigger).map((node) => runtimeNode(node, "trigger"));
   const collectibles = nodes.filter((node) => node.flags?.collectible).map((node) => runtimeNode(node, "collectible"));
   const colliders = nodes
-    .filter((node) => node.flags?.hasCollider)
-    .map((node) => runtimeNode(node, "collider"));
+    .filter((node) => node.flags?.hasSolidCollider)
+    .map((node) => runtimeNode(node, "collider", { triggerMode: false }));
+  const triggerColliders = nodes
+    .filter((node) => node.flags?.hasTriggerCollider)
+    .map((node) => runtimeNode(node, "triggerCollider", { triggerMode: true }));
   const materials = spatialScene.materials || [];
 
   return {
@@ -278,6 +312,9 @@ function buildWebXrRuntime(spatialScene) {
       nodes: spatialScene.stats?.nodes || nodes.length,
       meshes: spatialScene.stats?.meshes || nodes.filter((node) => node.mesh).length,
       colliders: spatialScene.stats?.colliders || colliders.reduce((sum, node) => sum + node.colliders.length, 0),
+      solidColliders: spatialScene.stats?.solidColliders || colliders.reduce((sum, node) => sum + node.colliders.length, 0),
+      triggerColliders: spatialScene.stats?.triggerColliders || triggerColliders.reduce((sum, node) => sum + node.colliders.length, 0),
+      rigidbodies: spatialScene.stats?.rigidbodies || nodes.filter((node) => node.rigidbody?.hasRigidbody).length,
       teleport: teleport.length,
       triggers: triggers.length,
       collectibles: collectibles.length,
@@ -294,6 +331,7 @@ function buildWebXrRuntime(spatialScene) {
     physics: {
       gravity: [0, -9.81, 0],
       colliders,
+      triggerColliders,
     },
     interactions: {
       triggers,
@@ -308,8 +346,13 @@ function buildWebXrRuntime(spatialScene) {
   };
 }
 
-function runtimeNode(node, role) {
-  const colliders = (node.colliders || []).map(runtimeCollider);
+function runtimeNode(node, role, options = {}) {
+  const sourceColliders = (node.colliders || []).filter((collider) => {
+    if (options.triggerMode === true) return Boolean(collider.isTrigger);
+    if (options.triggerMode === false) return !collider.isTrigger;
+    return true;
+  });
+  const colliders = sourceColliders.map(runtimeCollider);
   const bounds = unionBounds(colliders.map((collider) => collider.bounds).filter(Boolean));
   return {
     id: node.id,
@@ -317,10 +360,15 @@ function runtimeNode(node, role) {
     kind: node.kind,
     name: node.name,
     path: node.path,
+    tag: node.tag || "",
+    layer: node.layer || 0,
+    layerName: node.layerName || "",
+    isStatic: Boolean(node.isStatic),
     mesh: node.mesh || "",
     materialIds: node.materialIds || [],
     position: roundVec(node.transform?.position || colliderCenter(bounds) || [0, 0, 0]),
     matrix: Array.isArray(node.transform?.matrix) ? node.transform.matrix.map(roundNumber) : [],
+    rigidbody: node.rigidbody || { hasRigidbody: false },
     bounds,
     colliders,
   };
@@ -335,6 +383,13 @@ function runtimeCollider(collider) {
   return {
     type,
     shape,
+    name: collider.name || "",
+    enabled: collider.enabled !== false,
+    isTrigger: Boolean(collider.isTrigger),
+    tag: collider.tag || "",
+    layer: Number.isFinite(collider.layer) ? collider.layer : 0,
+    layerName: collider.layerName || "",
+    physicsMaterial: collider.physicsMaterial || "",
     center,
     size,
     radius,

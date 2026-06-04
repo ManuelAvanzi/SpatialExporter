@@ -13,6 +13,21 @@ Current phase: **physical export**. The tool exports meshes, baked skinned meshe
 - `webxr.runtime.json`: compact runtime contract for teleport, triggers, collectibles, colliders and material roles
 - `<SceneName>_Viewer`: generated WebGL debug viewer
 
+## Physical Data
+
+SpatialExporter preserves Unity physical metadata needed by a WebXR runtime:
+
+- GameObject tag, layer, layer name and static flag
+- enabled colliders, including trigger colliders
+- collider type, trigger state, physics material, world bounds and local shape data
+- `BoxCollider`, `SphereCollider`, `CapsuleCollider` and `MeshCollider` details where Unity exposes them
+- Rigidbody presence, mass, gravity, kinematic state, drag, collision mode, interpolation and constraints
+
+In `webxr.runtime.json`, solid colliders and trigger colliders are separated:
+
+- `physics.colliders`
+- `physics.triggerColliders`
+
 ## Included Pieces
 
 - `spatialExporter.js`: CLI entrypoint

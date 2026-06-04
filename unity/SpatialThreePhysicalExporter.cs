@@ -157,7 +157,7 @@ public static class SpatialThreePhysicalExporter
         string relativeMeshPath = $"meshes/{meshName}.obj";
         WriteObj(meshFilter.sharedMesh, Path.Combine(meshDir, meshName + ".obj"));
 
-        objects.Add(CreateObjectExport(go, "MeshRenderer", relativeMeshPath, renderer.sharedMaterials, GetNonTriggerColliders(go), textureDir));
+        objects.Add(CreateObjectExport(go, "MeshRenderer", relativeMeshPath, renderer.sharedMaterials, GetEnabledColliders(go), textureDir));
         meshIndex++;
     }
 
@@ -177,7 +177,7 @@ public static class SpatialThreePhysicalExporter
             string relativeMeshPath = $"meshes/{meshName}.obj";
             WriteObj(baked, Path.Combine(meshDir, meshName + ".obj"));
 
-            objects.Add(CreateObjectExport(go, "SkinnedMeshRenderer", relativeMeshPath, renderer.sharedMaterials, GetNonTriggerColliders(go), textureDir));
+            objects.Add(CreateObjectExport(go, "SkinnedMeshRenderer", relativeMeshPath, renderer.sharedMaterials, GetEnabledColliders(go), textureDir));
             meshIndex++;
         }
         finally
@@ -188,7 +188,7 @@ public static class SpatialThreePhysicalExporter
 
     private static void ExportColliders(GameObject go, List<PhysicalObjectExport> objects)
     {
-        Collider[] colliders = GetNonTriggerColliders(go);
+        Collider[] colliders = GetEnabledColliders(go);
         if (colliders.Length == 0)
         {
             return;
@@ -209,11 +209,16 @@ public static class SpatialThreePhysicalExporter
         {
             name = go.name,
             hierarchyPath = GetHierarchyPath(go.transform),
+            tag = go.tag,
+            layer = go.layer,
+            layerName = LayerMask.LayerToName(go.layer),
+            isStatic = go.isStatic,
             sourceType = sourceType,
             mesh = meshPath,
             transform = TransformExport.From(go.transform),
             materials = ExportMaterials(materials, textureDir),
-            colliders = ExportColliders(colliders)
+            colliders = ExportColliders(colliders),
+            rigidbody = RigidbodyExport.From(go.GetComponent<Rigidbody>())
         };
     }
 
@@ -411,13 +416,13 @@ public static class SpatialThreePhysicalExporter
         return $"textures/{targetName}";
     }
 
-    private static Collider[] GetNonTriggerColliders(GameObject go)
+    private static Collider[] GetEnabledColliders(GameObject go)
     {
         Collider[] all = go.GetComponents<Collider>();
         var filtered = new List<Collider>();
         foreach (Collider collider in all)
         {
-            if (collider != null && collider.enabled && !collider.isTrigger)
+            if (collider != null && collider.enabled)
             {
                 filtered.Add(collider);
             }
@@ -434,6 +439,13 @@ public static class SpatialThreePhysicalExporter
             var item = new ColliderExport
             {
                 type = collider.GetType().Name,
+                name = collider.name,
+                enabled = collider.enabled,
+                isTrigger = collider.isTrigger,
+                tag = collider.gameObject.tag,
+                layer = collider.gameObject.layer,
+                layerName = LayerMask.LayerToName(collider.gameObject.layer),
+                physicsMaterial = collider.sharedMaterial != null ? collider.sharedMaterial.name : string.Empty,
                 center = FloatArray(collider.bounds.center.x, collider.bounds.center.y, -collider.bounds.center.z),
                 size = FloatArray(collider.bounds.size.x, collider.bounds.size.y, collider.bounds.size.z)
             };
@@ -636,11 +648,54 @@ public static class SpatialThreePhysicalExporter
     {
         public string name;
         public string hierarchyPath;
+        public string tag;
+        public int layer;
+        public string layerName;
+        public bool isStatic;
         public string sourceType;
         public string mesh;
         public TransformExport transform;
         public MaterialExport[] materials;
         public ColliderExport[] colliders;
+        public RigidbodyExport rigidbody;
+    }
+
+    [Serializable]
+    private class RigidbodyExport
+    {
+        public bool hasRigidbody;
+        public bool isKinematic;
+        public bool useGravity;
+        public float mass;
+        public float drag;
+        public float angularDrag;
+        public string collisionDetectionMode;
+        public string interpolation;
+        public string constraints;
+
+        public static RigidbodyExport From(Rigidbody rigidbody)
+        {
+            if (rigidbody == null)
+            {
+                return new RigidbodyExport
+                {
+                    hasRigidbody = false
+                };
+            }
+
+            return new RigidbodyExport
+            {
+                hasRigidbody = true,
+                isKinematic = rigidbody.isKinematic,
+                useGravity = rigidbody.useGravity,
+                mass = rigidbody.mass,
+                drag = rigidbody.drag,
+                angularDrag = rigidbody.angularDrag,
+                collisionDetectionMode = rigidbody.collisionDetectionMode.ToString(),
+                interpolation = rigidbody.interpolation.ToString(),
+                constraints = rigidbody.constraints.ToString()
+            };
+        }
     }
 
     [Serializable]
@@ -709,6 +764,13 @@ public static class SpatialThreePhysicalExporter
     private class ColliderExport
     {
         public string type;
+        public string name;
+        public bool enabled;
+        public bool isTrigger;
+        public string tag;
+        public int layer;
+        public string layerName;
+        public string physicsMaterial;
         public float[] center;
         public float[] size;
         public float[] localCenter;
