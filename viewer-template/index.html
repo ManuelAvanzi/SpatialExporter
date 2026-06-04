@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BODYLAB3 WebGL Physical Viewer</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="shell">
+    <canvas id="viewport" aria-label="BODYLAB3 WebGL scene"></canvas>
+    <section class="panel" aria-label="Scene controls">
+      <header>
+        <p>BODYLAB3</p>
+        <h1>Physical Export</h1>
+      </header>
+      <div class="status">
+        <div>
+          <span id="loadedCount">0</span>
+          <small>loaded meshes</small>
+        </div>
+        <div>
+          <span id="objectCount">0</span>
+          <small>objects</small>
+        </div>
+      </div>
+      <div class="meter" aria-hidden="true"><span id="progressBar"></span></div>
+      <div class="controls">
+        <button id="resetView" type="button">Reset View</button>
+        <button id="toggleWire" type="button">Wire</button>
+        <button id="toggleCull" type="button">Cull</button>
+      </div>
+      <label class="range">
+        <span>Exposure</span>
+        <input id="exposure" type="range" min="0.25" max="2.4" step="0.05" value="0.9" />
+      </label>
+      <label class="range">
+        <span>Scale</span>
+        <input id="sceneScale" type="range" min="0.1" max="2" step="0.05" value="1" />
+      </label>
+      <section class="control-group" aria-label="Lighting controls">
+        <h2>Lighting</h2>
+        <label class="range value-range">
+          <span>Ambient <b id="ambientValue">0.55</b></span>
+          <input id="ambientStrength" type="range" min="0" max="1.5" step="0.05" value="0.55" />
+        </label>
+        <label class="range value-range">
+          <span>Lights <b id="lightValue">0.50</b></span>
+          <input id="lightStrength" type="range" min="0" max="1.5" step="0.05" value="0.5" />
+        </label>
+        <label class="range value-range">
+          <span>Reflections <b id="reflectionValue">0.75</b></span>
+          <input id="reflectionStrength" type="range" min="0" max="1.6" step="0.05" value="0.75" />
+        </label>
+        <label class="range value-range">
+          <span>Specular <b id="specularValue">0.55</b></span>
+          <input id="specularStrength" type="range" min="0" max="1.6" step="0.05" value="0.55" />
+        </label>
+        <label class="range value-range">
+          <span>Normal maps <b id="normalValue">0.80</b></span>
+          <input id="normalStrength" type="range" min="0" max="1.5" step="0.05" value="0.8" />
+        </label>
+      </section>
+      <section class="semantic-section" aria-label="Physical metadata">
+        <div class="section-title"><h2>Physical Map</h2><span id="metadataStatus">metadata</span></div>
+        <div id="semanticStats" class="semantic-stats"></div>
+        <div class="debug-toggles" id="debugToggles" aria-label="Runtime debug layers">
+          <button class="debug-button" type="button" data-debug="colliders">Colliders</button>
+          <button class="debug-button is-active" type="button" data-debug="teleport">Teleport</button>
+          <button class="debug-button is-active" type="button" data-debug="triggers">Triggers</button>
+          <button class="debug-button is-active" type="button" data-debug="collectibles">Collect</button>
+        </div>
+        <div class="filter-bar" role="group" aria-label="Object filters">
+          <button class="filter-button is-active" type="button" data-filter="all">All</button>
+          <button class="filter-button" type="button" data-filter="mesh">Mesh</button>
+          <button class="filter-button" type="button" data-filter="teleport">Teleport</button>
+          <button class="filter-button" type="button" data-filter="collectible">Collect</button>
+          <button class="filter-button" type="button" data-filter="trigger">Trigger</button>
+          <button class="filter-button" type="button" data-filter="collider">Collider</button>
+        </div>
+        <input id="objectSearch" class="object-search" type="search" placeholder="Search objects" />
+      </section>
+      <section class="object-section" aria-label="Scene objects">
+        <div class="section-title"><h2>Objects</h2><span id="objectListCount">scene list</span></div>
+        <ol id="objectList" class="object-list"></ol>
+      </section>
+    </section>
+  </main>
+  <script src="./app.js"></script>
+</body>
+</html>

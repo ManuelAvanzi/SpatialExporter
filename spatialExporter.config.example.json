@@ -1,0 +1,6 @@
+{
+  "project": "C:/Users/manue/Desktop/2026-Lavoro/SpatialReload/SpatialReloadStarter",
+  "scene": "Assets/Examples/BODYLAB3/BodyLab3_Scene.unity",
+  "mode": "physical",
+  "notes": "Current phase: physical scene export. Meshes, materials, textures, colliders, lights and viewer generation."
+}

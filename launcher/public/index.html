@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>spatialExporter</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="app">
+    <section class="header">
+      <p>Spatial Reload</p>
+      <h1>spatialExporter</h1>
+    </section>
+    <section class="panel">
+      <label>
+        <span>Unity project</span>
+        <input id="project" type="text" spellcheck="false" />
+      </label>
+      <label>
+        <span>Scene</span>
+        <select id="sceneSelect"></select>
+      </label>
+      <label>
+        <span>Scene path</span>
+        <input id="scene" type="text" spellcheck="false" />
+      </label>
+      <div class="actions">
+        <button id="refreshScenes" type="button">Refresh scenes</button>
+        <button id="export" type="button">Export physical</button>
+      </div>
+    </section>
+    <section class="status">
+      <div><span id="state">Idle</span><small>status</small></div>
+      <div><a id="viewer" href="#" target="_blank" rel="noreferrer">viewer not ready</a><small>output</small></div>
+    </section>
+    <pre id="log"></pre>
+  </main>
+  <script src="./app.js"></script>
+</body>
+</html>

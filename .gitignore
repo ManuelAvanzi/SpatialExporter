@@ -1,0 +1,24 @@
+node_modules/
+npm-debug.log*
+
+# Generated exports
+*_Physical/
+*_Viewer/
+ThreeExport/
+
+# Unity project cache, if this tool is copied into a Unity project
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+UserSettings/
+*.csproj
+*.sln
+.vs/
+.vscode/
+
+# OS/editor
+.DS_Store
+Thumbs.db

@@ -1,0 +1,14 @@
+{
+  "name": "spatial-exporter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Unity physical scene exporter and WebGL/WebXR debug viewer generator.",
+  "bin": {
+    "spatialExporter": "./spatialExporter.js"
+  },
+  "scripts": {
+    "check": "node --check spatialExporter.js && node --check launcher/server.js && node --check launcher/public/app.js && node --check viewer-template/app.js && node --check viewer-template/server.js",
+    "launcher": "node launcher/server.js"
+  },
+  "license": "MIT"
+}

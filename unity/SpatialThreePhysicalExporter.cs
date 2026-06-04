@@ -1,0 +1,728 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Text;
+using UnityEditor;
+using UnityEngine;
+using UnityEngine.SceneManagement;
+using UnityEditor.SceneManagement;
+
+public static class SpatialThreePhysicalExporter
+{
+    private const string MenuPath = "Tools/Spatial Reload/Export BODYLAB3 Physical Objects";
+    private const string BodyLab3ScenePath = "Assets/Examples/BODYLAB3/BodyLab3_Scene.unity";
+
+    [MenuItem(MenuPath)]
+    public static void ExportBodyLab3ScenePhysicalObjects()
+    {
+        EditorSceneManager.OpenScene(BodyLab3ScenePath, OpenSceneMode.Single);
+        ExportActiveScenePhysicalObjects();
+    }
+
+    public static void ExportFromSpatialExporterArgs()
+    {
+        string scenePath = GetCommandLineValue("-spatialScene", BodyLab3ScenePath);
+        string exportRoot = GetCommandLineValue("-spatialOut", string.Empty);
+        EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Single);
+        ExportActiveScenePhysicalObjects(string.IsNullOrWhiteSpace(exportRoot) ? null : exportRoot, false);
+    }
+
+    public static void ExportActiveScenePhysicalObjects()
+    {
+        ExportActiveScenePhysicalObjects(null, true);
+    }
+
+    private static void ExportActiveScenePhysicalObjects(string explicitExportRoot, bool revealInFinder)
+    {
+        Scene scene = SceneManager.GetActiveScene();
+        if (!scene.IsValid())
+        {
+            Debug.LogError("No active scene is loaded.");
+            return;
+        }
+
+        string projectRoot = Directory.GetParent(Application.dataPath).FullName;
+        string exportRoot = string.IsNullOrWhiteSpace(explicitExportRoot)
+            ? Path.Combine(projectRoot, "ThreeExport", SanitizeFileName(scene.name) + "_Physical")
+            : explicitExportRoot;
+        string meshDir = Path.Combine(exportRoot, "meshes");
+        string textureDir = Path.Combine(exportRoot, "textures");
+        Directory.CreateDirectory(meshDir);
+        Directory.CreateDirectory(textureDir);
+
+        var export = new SceneExport
+        {
+            sceneName = scene.name,
+            exportedAtUtc = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
+            unityVersion = Application.unityVersion,
+            coordinateSystem = "Unity converted to Three-friendly OBJ coordinates: x,y,-z with reversed triangle winding.",
+            objects = new List<PhysicalObjectExport>(),
+            lighting = ExportLighting(scene)
+        };
+
+        var roots = scene.GetRootGameObjects();
+        int meshIndex = 0;
+        foreach (GameObject root in roots)
+        {
+            Traverse(root.transform, export.objects, meshDir, textureDir, ref meshIndex);
+        }
+
+        string json = JsonUtility.ToJson(export, true);
+        File.WriteAllText(Path.Combine(exportRoot, "scene.json"), json, Encoding.UTF8);
+
+        AssetDatabase.Refresh();
+        Debug.Log($"Exported {export.objects.Count} physical objects to: {exportRoot}");
+        if (revealInFinder)
+        {
+            EditorUtility.RevealInFinder(exportRoot);
+        }
+    }
+
+    private static SceneLightingExport ExportLighting(Scene scene)
+    {
+        var lights = new List<LightExport>();
+        foreach (GameObject root in scene.GetRootGameObjects())
+        {
+            Light[] found = root.GetComponentsInChildren<Light>(true);
+            foreach (Light light in found)
+            {
+                if (light == null || !light.enabled || !light.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                lights.Add(new LightExport
+                {
+                    name = light.name,
+                    hierarchyPath = GetHierarchyPath(light.transform),
+                    type = light.type.ToString(),
+                    color = FloatArray(light.color.r, light.color.g, light.color.b, 1f),
+                    intensity = light.intensity,
+                    range = light.range,
+                    spotAngle = light.spotAngle,
+                    position = ConvertPosition(light.transform.position),
+                    directionToLight = ConvertDirection(-light.transform.forward)
+                });
+            }
+        }
+
+        Material skybox = RenderSettings.skybox;
+        return new SceneLightingExport
+        {
+            ambientMode = RenderSettings.ambientMode.ToString(),
+            ambientSkyColor = FloatArray(RenderSettings.ambientSkyColor.r, RenderSettings.ambientSkyColor.g, RenderSettings.ambientSkyColor.b, 1f),
+            ambientEquatorColor = FloatArray(RenderSettings.ambientEquatorColor.r, RenderSettings.ambientEquatorColor.g, RenderSettings.ambientEquatorColor.b, 1f),
+            ambientGroundColor = FloatArray(RenderSettings.ambientGroundColor.r, RenderSettings.ambientGroundColor.g, RenderSettings.ambientGroundColor.b, 1f),
+            ambientLight = FloatArray(RenderSettings.ambientLight.r, RenderSettings.ambientLight.g, RenderSettings.ambientLight.b, 1f),
+            ambientIntensity = RenderSettings.ambientIntensity,
+            reflectionIntensity = RenderSettings.reflectionIntensity,
+            reflectionBounces = RenderSettings.reflectionBounces,
+            defaultReflectionMode = RenderSettings.defaultReflectionMode.ToString(),
+            fog = RenderSettings.fog,
+            fogColor = FloatArray(RenderSettings.fogColor.r, RenderSettings.fogColor.g, RenderSettings.fogColor.b, 1f),
+            fogDensity = RenderSettings.fogDensity,
+            fogMode = RenderSettings.fogMode.ToString(),
+            skyboxMaterial = skybox != null ? skybox.name : string.Empty,
+            lights = lights.ToArray()
+        };
+    }
+    private static void Traverse(Transform transform, List<PhysicalObjectExport> objects, string meshDir, string textureDir, ref int meshIndex)
+    {
+        GameObject go = transform.gameObject;
+
+        if (go.activeInHierarchy)
+        {
+            ExportMeshFilter(go, objects, meshDir, textureDir, ref meshIndex);
+            ExportSkinnedMesh(go, objects, meshDir, textureDir, ref meshIndex);
+            ExportColliders(go, objects);
+        }
+
+        for (int i = 0; i < transform.childCount; i++)
+        {
+            Traverse(transform.GetChild(i), objects, meshDir, textureDir, ref meshIndex);
+        }
+    }
+
+    private static void ExportMeshFilter(GameObject go, List<PhysicalObjectExport> objects, string meshDir, string textureDir, ref int meshIndex)
+    {
+        MeshFilter meshFilter = go.GetComponent<MeshFilter>();
+        MeshRenderer renderer = go.GetComponent<MeshRenderer>();
+        if (meshFilter == null || renderer == null || meshFilter.sharedMesh == null || !renderer.enabled)
+        {
+            return;
+        }
+
+        string meshName = SanitizeFileName($"{meshIndex:0000}_{go.name}");
+        string relativeMeshPath = $"meshes/{meshName}.obj";
+        WriteObj(meshFilter.sharedMesh, Path.Combine(meshDir, meshName + ".obj"));
+
+        objects.Add(CreateObjectExport(go, "MeshRenderer", relativeMeshPath, renderer.sharedMaterials, GetNonTriggerColliders(go), textureDir));
+        meshIndex++;
+    }
+
+    private static void ExportSkinnedMesh(GameObject go, List<PhysicalObjectExport> objects, string meshDir, string textureDir, ref int meshIndex)
+    {
+        SkinnedMeshRenderer renderer = go.GetComponent<SkinnedMeshRenderer>();
+        if (renderer == null || renderer.sharedMesh == null || !renderer.enabled)
+        {
+            return;
+        }
+
+        Mesh baked = new Mesh();
+        try
+        {
+            renderer.BakeMesh(baked);
+            string meshName = SanitizeFileName($"{meshIndex:0000}_{go.name}_skinned");
+            string relativeMeshPath = $"meshes/{meshName}.obj";
+            WriteObj(baked, Path.Combine(meshDir, meshName + ".obj"));
+
+            objects.Add(CreateObjectExport(go, "SkinnedMeshRenderer", relativeMeshPath, renderer.sharedMaterials, GetNonTriggerColliders(go), textureDir));
+            meshIndex++;
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(baked);
+        }
+    }
+
+    private static void ExportColliders(GameObject go, List<PhysicalObjectExport> objects)
+    {
+        Collider[] colliders = GetNonTriggerColliders(go);
+        if (colliders.Length == 0)
+        {
+            return;
+        }
+
+        bool alreadyExportedAsMesh = go.GetComponent<MeshRenderer>() != null || go.GetComponent<SkinnedMeshRenderer>() != null;
+        if (alreadyExportedAsMesh)
+        {
+            return;
+        }
+
+        objects.Add(CreateObjectExport(go, "ColliderOnly", string.Empty, Array.Empty<Material>(), colliders, string.Empty));
+    }
+
+    private static PhysicalObjectExport CreateObjectExport(GameObject go, string sourceType, string meshPath, Material[] materials, Collider[] colliders, string textureDir)
+    {
+        return new PhysicalObjectExport
+        {
+            name = go.name,
+            hierarchyPath = GetHierarchyPath(go.transform),
+            sourceType = sourceType,
+            mesh = meshPath,
+            transform = TransformExport.From(go.transform),
+            materials = ExportMaterials(materials, textureDir),
+            colliders = ExportColliders(colliders)
+        };
+    }
+
+    private static MaterialExport[] ExportMaterials(Material[] materials, string textureDir)
+    {
+        var output = new List<MaterialExport>();
+        foreach (Material material in materials)
+        {
+            if (material == null)
+            {
+                continue;
+            }
+
+            Color color = Color.white;
+            if (material.HasProperty("_BaseColor"))
+            {
+                color = material.GetColor("_BaseColor");
+            }
+            else if (material.HasProperty("_Color"))
+            {
+                color = material.GetColor("_Color");
+            }
+
+            output.Add(new MaterialExport
+            {
+                name = material.name,
+                shader = material.shader != null ? material.shader.name : string.Empty,
+                color = FloatArray(color.r, color.g, color.b, color.a),
+                texture = ExportMainTexture(material, textureDir),
+                renderQueue = material.renderQueue,
+                isTransparent = IsTransparentMaterial(material),
+                properties = ExportMaterialProperties(material, textureDir)
+            });
+        }
+
+        return output.ToArray();
+    }
+    private static string ExportMainTexture(Material material, string textureDir)
+    {
+        if (string.IsNullOrEmpty(textureDir) || material == null)
+        {
+            return string.Empty;
+        }
+
+        Texture texture = null;
+        if (material.HasProperty("_BaseMap"))
+        {
+            texture = material.GetTexture("_BaseMap");
+        }
+        if (texture == null && material.HasProperty("_MainTex"))
+        {
+            texture = material.GetTexture("_MainTex");
+        }
+        if (!(texture is Texture2D texture2D))
+        {
+            return string.Empty;
+        }
+
+        string assetPath = AssetDatabase.GetAssetPath(texture2D);
+        if (string.IsNullOrEmpty(assetPath))
+        {
+            return string.Empty;
+        }
+
+        string extension = Path.GetExtension(assetPath).ToLowerInvariant();
+        if (extension != ".png" && extension != ".jpg" && extension != ".jpeg")
+        {
+            return string.Empty;
+        }
+
+        string projectRoot = Directory.GetParent(Application.dataPath).FullName;
+        string sourcePath = Path.Combine(projectRoot, assetPath);
+        if (!File.Exists(sourcePath))
+        {
+            return string.Empty;
+        }
+
+        string targetName = SanitizeFileName($"{material.name}_{texture2D.name}{extension}");
+        string targetPath = Path.Combine(textureDir, targetName);
+        File.Copy(sourcePath, targetPath, true);
+        return $"textures/{targetName}";
+    }
+    private static bool IsTransparentMaterial(Material material)
+    {
+        if (material == null)
+        {
+            return false;
+        }
+
+        string shaderName = material.shader != null ? material.shader.name.ToLowerInvariant() : string.Empty;
+        string materialName = material.name.ToLowerInvariant();
+        if (material.renderQueue >= 3000 || shaderName.Contains("transparent") || shaderName.Contains("water") || materialName.Contains("glass") || materialName.Contains("water"))
+        {
+            return true;
+        }
+
+        Color color = Color.white;
+        if (material.HasProperty("_BaseColor"))
+        {
+            color = material.GetColor("_BaseColor");
+        }
+        else if (material.HasProperty("_Color"))
+        {
+            color = material.GetColor("_Color");
+        }
+
+        return color.a < 0.98f;
+    }
+
+    private static MaterialPropertyExport[] ExportMaterialProperties(Material material, string textureDir)
+    {
+        var output = new List<MaterialPropertyExport>();
+        Shader shader = material != null ? material.shader : null;
+        if (shader == null)
+        {
+            return output.ToArray();
+        }
+
+        int count = ShaderUtil.GetPropertyCount(shader);
+        for (int i = 0; i < count; i++)
+        {
+            string propertyName = ShaderUtil.GetPropertyName(shader, i);
+            string description = ShaderUtil.GetPropertyDescription(shader, i);
+            ShaderUtil.ShaderPropertyType type = ShaderUtil.GetPropertyType(shader, i);
+
+            if (type == ShaderUtil.ShaderPropertyType.Color && material.HasProperty(propertyName))
+            {
+                Color color = material.GetColor(propertyName);
+                output.Add(new MaterialPropertyExport
+                {
+                    name = propertyName,
+                    label = description,
+                    type = "Color",
+                    color = FloatArray(color.r, color.g, color.b, color.a)
+                });
+            }
+            else if ((type == ShaderUtil.ShaderPropertyType.Float || type == ShaderUtil.ShaderPropertyType.Range) && material.HasProperty(propertyName))
+            {
+                output.Add(new MaterialPropertyExport
+                {
+                    name = propertyName,
+                    label = description,
+                    type = "Float",
+                    value = material.GetFloat(propertyName)
+                });
+            }
+            else if (type == ShaderUtil.ShaderPropertyType.TexEnv && material.HasProperty(propertyName))
+            {
+                Texture texture = material.GetTexture(propertyName);
+                if (texture is Texture2D texture2D)
+                {
+                    output.Add(new MaterialPropertyExport
+                    {
+                        name = propertyName,
+                        label = description,
+                        type = "Texture",
+                        texture = ExportTexture(material, texture2D, textureDir, propertyName)
+                    });
+                }
+            }
+        }
+
+        return output.ToArray();
+    }
+
+    private static string ExportTexture(Material material, Texture2D texture2D, string textureDir, string propertyName)
+    {
+        if (string.IsNullOrEmpty(textureDir) || texture2D == null)
+        {
+            return string.Empty;
+        }
+
+        string assetPath = AssetDatabase.GetAssetPath(texture2D);
+        if (string.IsNullOrEmpty(assetPath))
+        {
+            return string.Empty;
+        }
+
+        string extension = Path.GetExtension(assetPath).ToLowerInvariant();
+        if (extension != ".png" && extension != ".jpg" && extension != ".jpeg")
+        {
+            return string.Empty;
+        }
+
+        string projectRoot = Directory.GetParent(Application.dataPath).FullName;
+        string sourcePath = Path.Combine(projectRoot, assetPath);
+        if (!File.Exists(sourcePath))
+        {
+            return string.Empty;
+        }
+
+        string targetName = SanitizeFileName($"{material.name}_{propertyName}_{texture2D.name}{extension}");
+        string targetPath = Path.Combine(textureDir, targetName);
+        File.Copy(sourcePath, targetPath, true);
+        return $"textures/{targetName}";
+    }
+
+    private static Collider[] GetNonTriggerColliders(GameObject go)
+    {
+        Collider[] all = go.GetComponents<Collider>();
+        var filtered = new List<Collider>();
+        foreach (Collider collider in all)
+        {
+            if (collider != null && collider.enabled && !collider.isTrigger)
+            {
+                filtered.Add(collider);
+            }
+        }
+
+        return filtered.ToArray();
+    }
+
+    private static ColliderExport[] ExportColliders(Collider[] colliders)
+    {
+        var output = new List<ColliderExport>();
+        foreach (Collider collider in colliders)
+        {
+            var item = new ColliderExport
+            {
+                type = collider.GetType().Name,
+                center = FloatArray(collider.bounds.center.x, collider.bounds.center.y, -collider.bounds.center.z),
+                size = FloatArray(collider.bounds.size.x, collider.bounds.size.y, collider.bounds.size.z)
+            };
+
+            if (collider is BoxCollider box)
+            {
+                item.localCenter = FloatArray(box.center.x, box.center.y, -box.center.z);
+                item.localSize = FloatArray(box.size.x, box.size.y, box.size.z);
+            }
+            else if (collider is SphereCollider sphere)
+            {
+                item.localCenter = FloatArray(sphere.center.x, sphere.center.y, -sphere.center.z);
+                item.radius = sphere.radius;
+            }
+            else if (collider is CapsuleCollider capsule)
+            {
+                item.localCenter = FloatArray(capsule.center.x, capsule.center.y, -capsule.center.z);
+                item.radius = capsule.radius;
+                item.height = capsule.height;
+                item.direction = capsule.direction;
+            }
+            else if (collider is MeshCollider meshCollider && meshCollider.sharedMesh != null)
+            {
+                item.meshName = meshCollider.sharedMesh.name;
+                item.convex = meshCollider.convex;
+            }
+
+            output.Add(item);
+        }
+
+        return output.ToArray();
+    }private static void WriteObj(Mesh mesh, string path)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("# Exported by SpatialThreePhysicalExporter");
+        sb.AppendLine($"o {SanitizeObjName(mesh.name)}");
+
+        Vector3[] vertices = mesh.vertices;
+        Vector3[] normals = mesh.normals;
+        Vector2[] uvs = mesh.uv;
+
+        foreach (Vector3 vertex in vertices)
+        {
+            sb.AppendLine(FormattableString.Invariant($"v {vertex.x} {vertex.y} {-vertex.z}"));
+        }
+
+        foreach (Vector2 uv in uvs)
+        {
+            sb.AppendLine(FormattableString.Invariant($"vt {uv.x} {uv.y}"));
+        }
+
+        foreach (Vector3 normal in normals)
+        {
+            sb.AppendLine(FormattableString.Invariant($"vn {normal.x} {normal.y} {-normal.z}"));
+        }
+
+        bool hasUvs = uvs != null && uvs.Length == vertices.Length;
+        bool hasNormals = normals != null && normals.Length == vertices.Length;
+
+        for (int subMesh = 0; subMesh < mesh.subMeshCount; subMesh++)
+        {
+            sb.AppendLine($"g submesh_{subMesh}");
+            int[] triangles = mesh.GetTriangles(subMesh);
+            for (int i = 0; i < triangles.Length; i += 3)
+            {
+                int a = triangles[i] + 1;
+                int b = triangles[i + 2] + 1;
+                int c = triangles[i + 1] + 1;
+                sb.AppendLine($"f {FormatObjIndex(a, hasUvs, hasNormals)} {FormatObjIndex(b, hasUvs, hasNormals)} {FormatObjIndex(c, hasUvs, hasNormals)}");
+            }
+        }
+
+        File.WriteAllText(path, sb.ToString(), Encoding.UTF8);
+    }
+
+    private static string FormatObjIndex(int index, bool hasUvs, bool hasNormals)
+    {
+        if (hasUvs && hasNormals)
+        {
+            return $"{index}/{index}/{index}";
+        }
+
+        if (hasUvs)
+        {
+            return $"{index}/{index}";
+        }
+
+        if (hasNormals)
+        {
+            return $"{index}//{index}";
+        }
+
+        return index.ToString(CultureInfo.InvariantCulture);
+    }
+
+    private static string GetHierarchyPath(Transform transform)
+    {
+        var parts = new Stack<string>();
+        Transform current = transform;
+        while (current != null)
+        {
+            parts.Push(current.name);
+            current = current.parent;
+        }
+
+        return string.Join("/", parts.ToArray());
+    }
+
+    private static string GetCommandLineValue(string key, string fallback)
+    {
+        string[] args = Environment.GetCommandLineArgs();
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (string.Equals(args[i], key, StringComparison.OrdinalIgnoreCase))
+            {
+                return args[i + 1];
+            }
+        }
+
+        return fallback;
+    }
+
+    private static string SanitizeFileName(string value)
+    {
+        foreach (char c in Path.GetInvalidFileNameChars())
+        {
+            value = value.Replace(c, '_');
+        }
+
+        return value.Replace(' ', '_');
+    }
+
+    private static string SanitizeObjName(string value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? "mesh" : SanitizeFileName(value);
+    }
+
+    private static float[] ConvertPosition(Vector3 value)
+    {
+        return FloatArray(value.x, value.y, -value.z);
+    }
+
+    private static float[] ConvertDirection(Vector3 value)
+    {
+        Vector3 normalized = value.normalized;
+        return FloatArray(normalized.x, normalized.y, -normalized.z);
+    }
+
+    private static float[] FloatArray(params float[] values)
+    {
+        return values;
+    }
+
+    [Serializable]
+    private class SceneExport
+    {
+        public string sceneName;
+        public string exportedAtUtc;
+        public string unityVersion;
+        public string coordinateSystem;
+        public List<PhysicalObjectExport> objects;
+        public SceneLightingExport lighting;
+    }
+
+    [Serializable]
+    private class SceneLightingExport
+    {
+        public string ambientMode;
+        public float[] ambientSkyColor;
+        public float[] ambientEquatorColor;
+        public float[] ambientGroundColor;
+        public float[] ambientLight;
+        public float ambientIntensity;
+        public float reflectionIntensity;
+        public int reflectionBounces;
+        public string defaultReflectionMode;
+        public bool fog;
+        public float[] fogColor;
+        public float fogDensity;
+        public string fogMode;
+        public string skyboxMaterial;
+        public LightExport[] lights;
+    }
+
+    [Serializable]
+    private class LightExport
+    {
+        public string name;
+        public string hierarchyPath;
+        public string type;
+        public float[] color;
+        public float intensity;
+        public float range;
+        public float spotAngle;
+        public float[] position;
+        public float[] directionToLight;
+    }
+    [Serializable]
+    private class PhysicalObjectExport
+    {
+        public string name;
+        public string hierarchyPath;
+        public string sourceType;
+        public string mesh;
+        public TransformExport transform;
+        public MaterialExport[] materials;
+        public ColliderExport[] colliders;
+    }
+
+    [Serializable]
+    private class TransformExport
+    {
+        public float[] position;
+        public float[] rotationEuler;
+        public float[] scale;
+        public float[] matrix;
+
+        public static TransformExport From(Transform transform)
+        {
+            Vector3 position = transform.position;
+            Vector3 euler = transform.rotation.eulerAngles;
+            Vector3 scale = transform.lossyScale;
+            return new TransformExport
+            {
+                position = FloatArray(position.x, position.y, -position.z),
+                rotationEuler = FloatArray(euler.x, -euler.y, -euler.z),
+                scale = FloatArray(scale.x, scale.y, scale.z),
+                matrix = MatrixToFloatArray(ConvertUnityToWebMatrix(transform.localToWorldMatrix))
+            };
+        }
+
+        private static Matrix4x4 ConvertUnityToWebMatrix(Matrix4x4 unityMatrix)
+        {
+            Matrix4x4 flipZ = Matrix4x4.Scale(new Vector3(1f, 1f, -1f));
+            return flipZ * unityMatrix * flipZ;
+        }
+
+        private static float[] MatrixToFloatArray(Matrix4x4 matrix)
+        {
+            return FloatArray(
+                matrix.m00, matrix.m10, matrix.m20, matrix.m30,
+                matrix.m01, matrix.m11, matrix.m21, matrix.m31,
+                matrix.m02, matrix.m12, matrix.m22, matrix.m32,
+                matrix.m03, matrix.m13, matrix.m23, matrix.m33
+            );
+        }
+    }
+
+    [Serializable]
+    private class MaterialExport
+    {
+        public string name;
+        public string shader;
+        public float[] color;
+        public string texture;
+        public int renderQueue;
+        public bool isTransparent;
+        public MaterialPropertyExport[] properties;
+    }
+
+    [Serializable]
+    private class MaterialPropertyExport
+    {
+        public string name;
+        public string label;
+        public string type;
+        public float[] color;
+        public float value;
+        public string texture;
+    }
+
+    [Serializable]
+    private class ColliderExport
+    {
+        public string type;
+        public float[] center;
+        public float[] size;
+        public float[] localCenter;
+        public float[] localSize;
+        public float radius;
+        public float height;
+        public int direction;
+        public string meshName;
+        public bool convex;
+    }
+}
+
+
+
+
+
+
