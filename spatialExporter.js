@@ -142,6 +142,7 @@ function readJsonFile(file) {
 function buildSpatialScene(raw, context) {
   const materials = new Map();
   const entrancePoints = buildEntrancePoints(raw.entrancePoints || []);
+  const behaviours = buildBehaviours(raw.behaviours || {});
   const nodes = (raw.objects || []).map((object, index) => {
     const materialIds = (object.materials || []).map((material) => registerMaterial(materials, material));
     return {
@@ -187,9 +188,14 @@ function buildSpatialScene(raw, context) {
       texturedMaterials,
       lights: raw.lighting?.lights?.length || 0,
       entrancePoints: entrancePoints.length,
+      animators: behaviours.animators.length,
+      animationClips: behaviours.animationClips,
+      loopRotations: behaviours.loopRotations.length,
+      transformAnimations: behaviours.transformAnimations.length,
     },
     nodes,
     entrancePoints,
+    behaviours,
     materials: [...materials.values()],
     lights: raw.lighting?.lights || [],
     lighting: raw.lighting || null,
@@ -204,6 +210,11 @@ function buildSpatialScene(raw, context) {
       },
       player: {
         entrancePoints: entrancePoints.map((point) => point.id),
+      },
+      behaviours: {
+        animators: behaviours.animators.map((animator) => animator.id),
+        loopRotations: behaviours.loopRotations.map((rotation) => rotation.id),
+        transformAnimations: behaviours.transformAnimations.map((animation) => animation.id),
       },
     },
   };
@@ -223,6 +234,95 @@ function buildEntrancePoints(points) {
     matrix: Array.isArray(point.transform?.matrix) ? point.transform.matrix.map(roundNumber) : [],
     radius: roundNumber(point.radius || 0),
   }));
+}
+
+function buildBehaviours(rawBehaviours) {
+  const animators = (rawBehaviours.animators || []).map((animator, index) => ({
+    id: `animator_${String(index).padStart(3, "0")}`,
+    name: animator.name || "",
+    path: animator.hierarchyPath || animator.name || "",
+    enabled: animator.enabled !== false,
+    controllerName: animator.controllerName || "",
+    controllerPath: animator.controllerPath || "",
+    clips: (animator.clips || []).map((clip) => ({
+      name: clip.name || "",
+      assetPath: clip.assetPath || "",
+      length: roundNumber(clip.length || 0),
+      frameRate: roundNumber(clip.frameRate || 0),
+      loopTime: Boolean(clip.loopTime),
+      bindings: (clip.bindings || []).map((binding) => ({
+        path: binding.path || "",
+        propertyName: binding.propertyName || "",
+        typeName: binding.typeName || "",
+        keyCount: binding.keyCount || 0,
+        firstTime: roundNumber(binding.firstTime || 0),
+        firstValue: roundNumber(binding.firstValue || 0),
+        lastTime: roundNumber(binding.lastTime || 0),
+        lastValue: roundNumber(binding.lastValue || 0),
+      })),
+    })),
+  }));
+
+  const loopRotations = (rawBehaviours.loopRotations || []).map((rotation, index) => ({
+    id: `loop_rotation_${String(index).padStart(3, "0")}`,
+    clipName: rotation.clipName || "",
+    targetPath: rotation.targetPath || "",
+    axis: normalizeAxis(rotation.axis),
+    degreesPerSecond: roundNumber(rotation.degreesPerSecond || 0),
+    duration: roundNumber(rotation.duration || 0),
+  })).filter((rotation) => rotation.targetPath && rotation.axis && Math.abs(rotation.degreesPerSecond) > 0.001);
+  const transformAnimations = buildTransformAnimations(animators);
+
+  return {
+    animators,
+    animationClips: animators.reduce((sum, animator) => sum + animator.clips.length, 0),
+    loopRotations,
+    transformAnimations,
+  };
+}
+
+function buildTransformAnimations(animators) {
+  const animations = [];
+  for (const animator of animators) {
+    for (const clip of animator.clips || []) {
+      for (const binding of clip.bindings || []) {
+        const axis = normalizeEulerProperty(binding.propertyName);
+        if (!axis) continue;
+        const delta = (Number(binding.lastValue) || 0) - (Number(binding.firstValue) || 0);
+        if (Math.abs(delta) < 0.5) continue;
+        animations.push({
+          id: `transform_animation_${String(animations.length).padStart(3, "0")}`,
+          animatorId: animator.id,
+          animatorPath: animator.path,
+          clipName: clip.name || "",
+          targetPath: combinePath(animator.path, binding.path),
+          property: "rotation",
+          axis,
+          fromDegrees: roundNumber(binding.firstValue || 0),
+          toDegrees: roundNumber(binding.lastValue || 0),
+          duration: roundNumber(Math.max((binding.lastTime || clip.length || 1) - (binding.firstTime || 0), 0.0001)),
+          loopTime: Boolean(clip.loopTime),
+          previewMode: clip.loopTime ? "loop" : "pingPong",
+        });
+      }
+    }
+  }
+  return animations;
+}
+
+function normalizeEulerProperty(propertyName) {
+  const match = String(propertyName || "").match(/localEulerAnglesRaw\.([xyz])$/);
+  return match ? match[1] : "";
+}
+
+function combinePath(root, relative) {
+  if (!relative) return root || "";
+  return root ? `${root}/${relative}` : relative;
+}
+
+function normalizeAxis(axis) {
+  const value = String(axis || "").toLowerCase();
+  return value === "x" || value === "y" || value === "z" ? value : "";
 }
 
 function registerMaterial(materials, material) {
@@ -307,6 +407,7 @@ function classifyMaterial(material) {
 function buildWebXrRuntime(spatialScene) {
   const nodes = spatialScene.nodes || [];
   const entrancePoints = spatialScene.entrancePoints || [];
+  const behaviours = spatialScene.behaviours || { animators: [], loopRotations: [] };
   const teleport = nodes.filter((node) => node.flags?.teleport).map((node) => runtimeNode(node, "teleport"));
   const triggers = nodes.filter((node) => node.flags?.trigger).map((node) => runtimeNode(node, "trigger"));
   const collectibles = nodes.filter((node) => node.flags?.collectible).map((node) => runtimeNode(node, "collectible"));
@@ -343,6 +444,9 @@ function buildWebXrRuntime(spatialScene) {
       collectibles: collectibles.length,
       lights: spatialScene.stats?.lights || 0,
       entrancePoints: entrancePoints.length,
+      animators: spatialScene.stats?.animators || 0,
+      loopRotations: behaviours.loopRotations?.length || 0,
+      transformAnimations: behaviours.transformAnimations?.length || 0,
     },
     navigation: {
       entrancePoints,
@@ -371,6 +475,11 @@ function buildWebXrRuntime(spatialScene) {
       triggers,
       collectibles,
     },
+    behaviours: {
+      animators: behaviours.animators || [],
+      loopRotations: runtimeLoopRotations(behaviours.loopRotations || []),
+      transformAnimations: runtimeTransformAnimations(behaviours.transformAnimations || []),
+    },
     materials: {
       water: materials.filter((material) => material.semantic === "water").map((material) => material.id),
       glass: materials.filter((material) => material.semantic === "glass").map((material) => material.id),
@@ -378,6 +487,43 @@ function buildWebXrRuntime(spatialScene) {
     },
     lights: spatialScene.lights || [],
   };
+}
+
+function runtimeLoopRotations(loopRotations) {
+  return loopRotations.map((rotation) => ({
+    id: rotation.id,
+    type: "loopRotation",
+    clipName: rotation.clipName || "",
+    targetPath: rotation.targetPath || "",
+    axis: rotation.axis,
+    radiansPerSecond: roundNumber((rotation.degreesPerSecond || 0) * Math.PI / 180 * axisHandedness(rotation.axis)),
+    degreesPerSecond: roundNumber((rotation.degreesPerSecond || 0) * axisHandedness(rotation.axis)),
+    duration: rotation.duration || 0,
+  }));
+}
+
+function runtimeTransformAnimations(transformAnimations) {
+  return transformAnimations.map((animation) => ({
+    id: animation.id,
+    type: "transformAnimation",
+    animatorId: animation.animatorId || "",
+    animatorPath: animation.animatorPath || "",
+    clipName: animation.clipName || "",
+    targetPath: animation.targetPath || "",
+    property: animation.property || "rotation",
+    axis: animation.axis,
+    fromRadians: roundNumber((animation.fromDegrees || 0) * Math.PI / 180 * axisHandedness(animation.axis)),
+    toRadians: roundNumber((animation.toDegrees || 0) * Math.PI / 180 * axisHandedness(animation.axis)),
+    fromDegrees: roundNumber((animation.fromDegrees || 0) * axisHandedness(animation.axis)),
+    toDegrees: roundNumber((animation.toDegrees || 0) * axisHandedness(animation.axis)),
+    duration: animation.duration || 1,
+    loopTime: Boolean(animation.loopTime),
+    previewMode: animation.previewMode || "pingPong",
+  }));
+}
+
+function axisHandedness(axis) {
+  return axis === "y" || axis === "z" ? -1 : 1;
 }
 
 function defaultSpawn(entrancePoints, teleport) {

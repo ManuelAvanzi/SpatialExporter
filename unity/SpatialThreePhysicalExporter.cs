@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using UnityEditor;
+using UnityEditor.Animations;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEditor.SceneManagement;
@@ -59,6 +60,7 @@ public static class SpatialThreePhysicalExporter
             coordinateSystem = "Unity converted to Three-friendly OBJ coordinates: x,y,-z with reversed triangle winding.",
             objects = new List<PhysicalObjectExport>(),
             entrancePoints = ExportEntrancePoints(scene),
+            behaviours = ExportBehaviours(scene),
             lighting = ExportLighting(scene)
         };
 
@@ -209,6 +211,145 @@ public static class SpatialThreePhysicalExporter
         }
 
         return fallback;
+    }
+
+    private static SceneBehavioursExport ExportBehaviours(Scene scene)
+    {
+        var animators = new List<AnimatorExport>();
+        var loopRotations = new List<LoopRotationExport>();
+
+        foreach (GameObject root in scene.GetRootGameObjects())
+        {
+            Animator[] found = root.GetComponentsInChildren<Animator>(true);
+            foreach (Animator animator in found)
+            {
+                if (animator == null || !animator.enabled || !animator.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                RuntimeAnimatorController runtimeController = animator.runtimeAnimatorController;
+                AnimatorController controller = runtimeController as AnimatorController;
+                var clips = new List<AnimationClipExport>();
+                if (controller != null)
+                {
+                    var seenClips = new HashSet<AnimationClip>();
+                    foreach (AnimationClip clip in controller.animationClips)
+                    {
+                        if (clip == null || seenClips.Contains(clip))
+                        {
+                            continue;
+                        }
+
+                        seenClips.Add(clip);
+                        AnimationClipSettings settings = AnimationUtility.GetAnimationClipSettings(clip);
+                        clips.Add(new AnimationClipExport
+                        {
+                            name = clip.name,
+                            assetPath = AssetDatabase.GetAssetPath(clip),
+                            length = clip.length,
+                            frameRate = clip.frameRate,
+                            loopTime = settings.loopTime,
+                            bindings = ExportClipBindings(clip)
+                        });
+
+                        loopRotations.AddRange(DetectLoopRotations(animator.transform, clip, settings.loopTime));
+                    }
+                }
+
+                animators.Add(new AnimatorExport
+                {
+                    name = animator.name,
+                    hierarchyPath = GetHierarchyPath(animator.transform),
+                    enabled = animator.enabled,
+                    controllerName = runtimeController != null ? runtimeController.name : string.Empty,
+                    controllerPath = runtimeController != null ? AssetDatabase.GetAssetPath(runtimeController) : string.Empty,
+                    clips = clips.ToArray()
+                });
+            }
+        }
+
+        return new SceneBehavioursExport
+        {
+            animators = animators.ToArray(),
+            loopRotations = loopRotations.ToArray()
+        };
+    }
+
+    private static AnimationBindingExport[] ExportClipBindings(AnimationClip clip)
+    {
+        var output = new List<AnimationBindingExport>();
+        foreach (EditorCurveBinding binding in AnimationUtility.GetCurveBindings(clip))
+        {
+            AnimationCurve curve = AnimationUtility.GetEditorCurve(clip, binding);
+            if (curve == null || curve.length == 0)
+            {
+                continue;
+            }
+
+            output.Add(new AnimationBindingExport
+            {
+                path = binding.path,
+                propertyName = binding.propertyName,
+                typeName = binding.type != null ? binding.type.Name : string.Empty,
+                keyCount = curve.length,
+                firstTime = curve.keys[0].time,
+                firstValue = curve.keys[0].value,
+                lastTime = curve.keys[curve.length - 1].time,
+                lastValue = curve.keys[curve.length - 1].value
+            });
+        }
+
+        return output.ToArray();
+    }
+
+    private static LoopRotationExport[] DetectLoopRotations(Transform animatorRoot, AnimationClip clip, bool loopTime)
+    {
+        var output = new List<LoopRotationExport>();
+        foreach (EditorCurveBinding binding in AnimationUtility.GetCurveBindings(clip))
+        {
+            string property = binding.propertyName ?? string.Empty;
+            if (!property.StartsWith("localEulerAnglesRaw.", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            AnimationCurve curve = AnimationUtility.GetEditorCurve(clip, binding);
+            if (curve == null || curve.length < 2)
+            {
+                continue;
+            }
+
+            Keyframe first = curve.keys[0];
+            Keyframe last = curve.keys[curve.length - 1];
+            float duration = Mathf.Max(last.time - first.time, 0.0001f);
+            float delta = last.value - first.value;
+            if (!loopTime || Mathf.Abs(delta) < 300f)
+            {
+                continue;
+            }
+
+            output.Add(new LoopRotationExport
+            {
+                clipName = clip.name,
+                targetPath = CombineHierarchyPath(GetHierarchyPath(animatorRoot), binding.path),
+                axis = property.Substring(property.Length - 1).ToLowerInvariant(),
+                degreesPerSecond = delta / duration,
+                duration = duration
+            });
+        }
+
+        return output.ToArray();
+    }
+
+    private static string CombineHierarchyPath(string rootPath, string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            return rootPath;
+        }
+
+        return string.IsNullOrWhiteSpace(rootPath) ? relativePath : rootPath + "/" + relativePath;
     }
 
     private static void Traverse(Transform transform, List<PhysicalObjectExport> objects, string meshDir, string textureDir, ref int meshIndex)
@@ -692,6 +833,7 @@ public static class SpatialThreePhysicalExporter
         public string coordinateSystem;
         public List<PhysicalObjectExport> objects;
         public EntrancePointExport[] entrancePoints;
+        public SceneBehavioursExport behaviours;
         public SceneLightingExport lighting;
     }
 
@@ -705,6 +847,58 @@ public static class SpatialThreePhysicalExporter
         public string layerName;
         public TransformExport transform;
         public float radius;
+    }
+
+    [Serializable]
+    private class SceneBehavioursExport
+    {
+        public AnimatorExport[] animators;
+        public LoopRotationExport[] loopRotations;
+    }
+
+    [Serializable]
+    private class AnimatorExport
+    {
+        public string name;
+        public string hierarchyPath;
+        public bool enabled;
+        public string controllerName;
+        public string controllerPath;
+        public AnimationClipExport[] clips;
+    }
+
+    [Serializable]
+    private class AnimationClipExport
+    {
+        public string name;
+        public string assetPath;
+        public float length;
+        public float frameRate;
+        public bool loopTime;
+        public AnimationBindingExport[] bindings;
+    }
+
+    [Serializable]
+    private class AnimationBindingExport
+    {
+        public string path;
+        public string propertyName;
+        public string typeName;
+        public int keyCount;
+        public float firstTime;
+        public float firstValue;
+        public float lastTime;
+        public float lastValue;
+    }
+
+    [Serializable]
+    private class LoopRotationExport
+    {
+        public string clipName;
+        public string targetPath;
+        public string axis;
+        public float degreesPerSecond;
+        public float duration;
     }
 
     [Serializable]

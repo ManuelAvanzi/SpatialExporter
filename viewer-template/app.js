@@ -49,6 +49,8 @@ const state = {
   objectSearch: "",
   metadata: null,
   runtime: null,
+  loopRotations: [],
+  transformAnimations: [],
   metadataByPath: new Map(),
   runtimeDebug: {
     colliders: false,
@@ -226,6 +228,8 @@ async function init() {
   const scene = await fetchJson(EXPORT_BASE + "scene.json");
   state.metadata = await fetchOptionalJson(EXPORT_BASE + "spatial.scene.json");
   state.runtime = await fetchOptionalJson(EXPORT_BASE + "webxr.runtime.json");
+  state.loopRotations = state.runtime?.behaviours?.loopRotations || [];
+  state.transformAnimations = state.runtime?.behaviours?.transformAnimations || [];
   indexMetadata(state.metadata);
   state.lighting = normalizeLighting(scene.lighting);
   const renderable = scene.objects.filter((item) => item.mesh && item.mesh.endsWith(".obj"));
@@ -305,6 +309,7 @@ function populateMetadataPanel(metadata) {
     ["Textures", stats.texturedMaterials],
     ["Lights", stats.lights],
     ["Entrances", stats.entrancePoints],
+    ["Animations", (stats.loopRotations || 0) + (stats.transformAnimations || 0)],
     ["Teleport", (interactions.teleport || []).length],
     ["Triggers", (interactions.triggers || []).length],
   ];
@@ -363,11 +368,13 @@ async function createMesh(item, parsed) {
 
   return {
     name: item.name,
+    path: item.hierarchyPath || item.name || "",
     count: parsed.positions.length / 3,
     positionBuffer,
     normalBuffer,
     uvBuffer,
     model,
+    baseModel: new Float32Array(model),
     materials,
     hasTransparent: materials.some((material) => material.transparent),
     groups: parsed.groups,
@@ -724,8 +731,9 @@ function render() {
   gl.uniform1f(loc.uSpecularScale, state.specularStrength);
   applyLightingUniforms();
 
-  drawMeshes(state.meshes.filter((mesh) => !mesh.hasTransparent), false);
-  drawMeshes(sortedTransparentMeshes(eye), true);
+  const time = performance.now() * 0.001;
+  drawMeshes(state.meshes.filter((mesh) => !mesh.hasTransparent), false, time);
+  drawMeshes(sortedTransparentMeshes(eye), true, time);
   drawRuntimeDebug(projection, view);
 
   requestAnimationFrame(render);
@@ -804,10 +812,10 @@ function drawSkyBackground() {
   gl.drawArrays(gl.TRIANGLES, 0, 6);
   gl.enable(gl.DEPTH_TEST);
 }
-function drawMeshes(meshes, transparentPass) {
+function drawMeshes(meshes, transparentPass, time) {
   gl.depthMask(!transparentPass);
   for (const mesh of meshes) {
-    gl.uniformMatrix4fv(loc.uModel, false, mesh.model);
+    gl.uniformMatrix4fv(loc.uModel, false, animatedModel(mesh, time));
 
     gl.bindBuffer(gl.ARRAY_BUFFER, mesh.positionBuffer);
     gl.enableVertexAttribArray(loc.aPosition);
@@ -844,6 +852,52 @@ function drawMeshes(meshes, transparentPass) {
     }
   }
   gl.depthMask(true);
+}
+
+function animatedModel(mesh, time) {
+  const rotations = matchingLoopRotations(mesh.path);
+  const transforms = matchingTransformAnimations(mesh.path);
+  if (!rotations.length && !transforms.length) return mesh.baseModel || mesh.model;
+
+  let model = mesh.baseModel || mesh.model;
+  for (const rotation of rotations) {
+    const amount = time * (Number(rotation.radiansPerSecond) || 0);
+    model = multiplyMatrix4(model, axisRotationMatrix(rotation.axis, amount));
+  }
+  for (const animation of transforms) {
+    const amount = transformAnimationAmount(animation, time);
+    model = multiplyMatrix4(model, axisRotationMatrix(animation.axis, amount));
+  }
+  return model;
+}
+
+function matchingLoopRotations(path) {
+  if (!path || !state.loopRotations.length) return [];
+  return state.loopRotations.filter((rotation) => {
+    const target = rotation.targetPath || "";
+    return target && (path === target || path.startsWith(`${target}/`));
+  });
+}
+
+function matchingTransformAnimations(path) {
+  if (!path || !state.transformAnimations.length) return [];
+  return state.transformAnimations.filter((animation) => {
+    const target = animation.targetPath || "";
+    return target && (path === target || path.startsWith(`${target}/`));
+  });
+}
+
+function transformAnimationAmount(animation, time) {
+  const duration = Math.max(Number(animation.duration) || 1, 0.0001);
+  let t = (time % duration) / duration;
+  if (animation.previewMode === "pingPong") {
+    const cycle = (time % (duration * 2)) / duration;
+    t = cycle <= 1 ? cycle : 2 - cycle;
+  }
+  const from = Number(animation.fromRadians) || 0;
+  const to = Number(animation.toRadians) || 0;
+  const eased = t * t * (3 - 2 * t);
+  return from + (to - from) * eased;
 }
 
 function drawRuntimeDebug(projection, view) {
@@ -1217,6 +1271,47 @@ function composeMatrix(p, r, s) {
     m20 * sz, m21 * sz, m22 * sz, 0,
     p[0], p[1], p[2], 1,
   ]);
+}
+
+function axisRotationMatrix(axis, angle) {
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  if (axis === "x") {
+    return new Float32Array([
+      1, 0, 0, 0,
+      0, c, s, 0,
+      0, -s, c, 0,
+      0, 0, 0, 1,
+    ]);
+  }
+  if (axis === "y") {
+    return new Float32Array([
+      c, 0, -s, 0,
+      0, 1, 0, 0,
+      s, 0, c, 0,
+      0, 0, 0, 1,
+    ]);
+  }
+  return new Float32Array([
+    c, s, 0, 0,
+    -s, c, 0, 0,
+    0, 0, 1, 0,
+    0, 0, 0, 1,
+  ]);
+}
+
+function multiplyMatrix4(a, b) {
+  const out = new Float32Array(16);
+  for (let col = 0; col < 4; col++) {
+    for (let row = 0; row < 4; row++) {
+      out[col * 4 + row] =
+        a[0 * 4 + row] * b[col * 4 + 0] +
+        a[1 * 4 + row] * b[col * 4 + 1] +
+        a[2 * 4 + row] * b[col * 4 + 2] +
+        a[3 * 4 + row] * b[col * 4 + 3];
+    }
+  }
+  return out;
 }
 
 function perspective(fovy, aspect, near, far) {
