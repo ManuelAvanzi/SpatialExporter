@@ -990,7 +990,8 @@ function snapPlayerToGround(position) {
     const b = item.bounds;
     if (!b?.min || !b?.max) continue;
     if (!circleOverlapsAabb(position[0], position[2], state.player.radius, b.min[0], b.max[0], b.min[2], b.max[2])) continue;
-    const groundY = colliderSurfaceY(item, position) ?? b.max[1];
+    const groundY = colliderSurfaceY(item, position);
+    if (groundY === null) continue;
     if (groundY <= feetY + state.player.stepHeight + 0.18 && groundY > bestY) bestY = groundY;
   }
   if (Number.isFinite(bestY) && feetY - bestY < state.player.stepHeight + 0.18 && feetY - bestY > -0.16) {
@@ -1009,7 +1010,7 @@ function playerCollision(position) {
   for (const item of solidColliders()) {
     const b = item.bounds;
     if (!b?.min || !b?.max) continue;
-    if (isWalkableMeshCollider(item, position)) continue;
+    if (colliderSurfaceY(item, position) !== null) continue;
     if (maxY <= b.min[1] || minY >= b.max[1]) continue;
     if (circleOverlapsAabb(position[0], position[2], state.player.radius, b.min[0], b.max[0], b.min[2], b.max[2])) {
       return item;
@@ -1019,12 +1020,15 @@ function playerCollision(position) {
 }
 
 function solidColliders() {
-  return (state.runtime?.physics?.colliders || []).filter((item) => {
-    if (!item.bounds?.min || !item.bounds?.max) return false;
-    const colliders = Array.isArray(item.colliders) ? item.colliders : [];
-    if (!colliders.length) return true;
-    return colliders.some((collider) => collider.enabled !== false && !collider.isTrigger);
-  });
+  return state.meshes
+    .filter((mesh) => mesh.bounds?.min && mesh.bounds?.max && mesh.collisionTriangles?.length)
+    .map((mesh) => ({
+      name: mesh.name,
+      path: mesh.path,
+      mesh: mesh.sourceMesh,
+      bounds: mesh.bounds,
+      collisionTriangles: mesh.collisionTriangles,
+    }));
 }
 
 function isRampCollider(item) {
@@ -1032,12 +1036,8 @@ function isRampCollider(item) {
   return text.includes("scala") || text.includes("ramp") || text.includes("stairs");
 }
 
-function isWalkableMeshCollider(item, position) {
-  return isRampCollider(item) || colliderTriangleSurfaceY(item, position) !== null;
-}
-
 function colliderSurfaceY(item, position) {
-  return colliderTriangleSurfaceY(item, position) ?? rampSurfaceY(item, position);
+  return colliderTriangleSurfaceY(item, position);
 }
 
 function colliderTriangleSurfaceY(item, position) {
@@ -1057,6 +1057,9 @@ function colliderTriangleSurfaceY(item, position) {
 
 function colliderTriangleSets(item) {
   const sets = [];
+  if (Array.isArray(item.collisionTriangles) && item.collisionTriangles.length) {
+    sets.push(item.collisionTriangles);
+  }
   for (const collider of item.colliders || []) {
     if (Array.isArray(collider.triangles) && collider.triangles.length) sets.push(collider.triangles);
   }
@@ -1417,7 +1420,7 @@ function runtimeDebugLines() {
   if (state.runtimeLineCache && !state.player.enabled) return state.runtimeLineCache;
   const groups = [];
   if (state.runtimeDebug.colliders) {
-    groups.push({ color: [0.47, 0.96, 0.83, 0.72], points: boundsLines((state.runtime.physics?.colliders || []).map((item) => item.bounds)) });
+    groups.push({ color: [0.47, 0.96, 0.83, 0.72], points: meshColliderDebugLines() });
   }
   if (state.runtimeDebug.spawn) {
     groups.push({ color: [0.88, 1.0, 0.62, 1.0], points: markerLines(runtimeSpawnMarker(), 3.2) });
@@ -1481,6 +1484,24 @@ function selectedTriangleLines() {
         addLine(points, b, c);
         addLine(points, c, a);
       }
+    }
+  }
+  return points;
+}
+
+function meshColliderDebugLines() {
+  const points = [];
+  for (const mesh of state.meshes) {
+    const triangles = mesh.collisionTriangles || [];
+    const stride = Math.max(9, Math.ceil(triangles.length / (9 * 36)) * 9);
+    for (let i = 0; i + 8 < triangles.length; i += stride) {
+      const a = [triangles[i], triangles[i + 1], triangles[i + 2]];
+      const b = [triangles[i + 3], triangles[i + 4], triangles[i + 5]];
+      const c = [triangles[i + 6], triangles[i + 7], triangles[i + 8]];
+      if (!isWalkableTriangle(a, b, c)) continue;
+      addLine(points, a, b);
+      addLine(points, b, c);
+      addLine(points, c, a);
     }
   }
   return points;
