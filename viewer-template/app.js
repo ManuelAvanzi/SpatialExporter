@@ -64,6 +64,7 @@ const state = {
     radius: 0.28,
     speed: 6.5,
     sprintMultiplier: 1.65,
+    stepHeight: 0.45,
     grounded: false,
     jumpsUsed: 0,
     maxJumps: 2,
@@ -753,6 +754,7 @@ function togglePlayerMode() {
     if (ui.runtimeStatus) ui.runtimeStatus.textContent = "player mode";
   } else if (ui.runtimeStatus) {
     ui.runtimeStatus.textContent = "orbit mode";
+    if (document.pointerLockElement === canvas) document.exitPointerLock();
   }
   if (ui.togglePlayer) ui.togglePlayer.classList.toggle("is-active", state.player.enabled);
   updatePlayerReadout();
@@ -832,10 +834,22 @@ function jumpPlayer() {
 
 function movePlayerAxis(position, axis, delta) {
   if (Math.abs(delta) < 0.000001) return;
+  const before = position[axis];
   position[axis] += delta;
   const hit = playerCollision(position);
   if (hit) {
-    position[axis] -= delta;
+    position[axis] = before;
+    if ((axis === 0 || axis === 2) && state.player.grounded) {
+      position[1] += state.player.stepHeight;
+      position[axis] += delta;
+      if (!playerCollision(position)) {
+        state.player.velocityY = 0;
+        snapPlayerToGround(position);
+        return;
+      }
+      position[axis] = before;
+      position[1] -= state.player.stepHeight;
+    }
     if (axis === 1 && delta < 0) {
       state.player.velocityY = 0;
       state.player.grounded = true;
@@ -851,7 +865,7 @@ function snapPlayerToGround(position) {
   }
   let bestY = -Infinity;
   const feetY = position[1] - state.player.height * 0.5;
-  for (const item of state.runtime?.physics?.colliders || []) {
+  for (const item of solidColliders()) {
     const b = item.bounds;
     if (!b?.min || !b?.max) continue;
     if (!circleOverlapsAabb(position[0], position[2], state.player.radius, b.min[0], b.max[0], b.min[2], b.max[2])) continue;
@@ -870,7 +884,7 @@ function snapPlayerToGround(position) {
 function playerCollision(position) {
   const minY = position[1] - state.player.height * 0.5;
   const maxY = position[1] + state.player.height * 0.5;
-  for (const item of state.runtime?.physics?.colliders || []) {
+  for (const item of solidColliders()) {
     const b = item.bounds;
     if (!b?.min || !b?.max) continue;
     if (maxY <= b.min[1] || minY >= b.max[1]) continue;
@@ -879,6 +893,15 @@ function playerCollision(position) {
     }
   }
   return null;
+}
+
+function solidColliders() {
+  return (state.runtime?.physics?.colliders || []).filter((item) => {
+    if (!item.bounds?.min || !item.bounds?.max) return false;
+    const colliders = Array.isArray(item.colliders) ? item.colliders : [];
+    if (!colliders.length) return true;
+    return colliders.some((collider) => collider.enabled !== false && !collider.isTrigger);
+  });
 }
 
 function circleOverlapsAabb(x, z, radius, minX, maxX, minZ, maxZ) {
@@ -1306,28 +1329,55 @@ canvas.addEventListener("pointerdown", (event) => {
   state.pointerLook = state.player.enabled;
   state.lastX = event.clientX;
   state.lastY = event.clientY;
-  canvas.setPointerCapture(event.pointerId);
+  if (state.player.enabled && document.pointerLockElement !== canvas) {
+    canvas.requestPointerLock?.();
+  } else {
+    canvas.setPointerCapture(event.pointerId);
+  }
 });
 canvas.addEventListener("pointermove", (event) => {
+  if (document.pointerLockElement === canvas) return;
   if (!state.dragging) return;
   const dx = event.clientX - state.lastX;
   const dy = event.clientY - state.lastY;
   state.lastX = event.clientX;
   state.lastY = event.clientY;
   if (state.pointerLook) {
-    state.player.yaw -= dx * 0.006;
-    state.player.pitch = clamp(state.player.pitch - dy * 0.006, -1.15, 1.15);
+    applyPlayerLook(dx, dy);
   } else {
     state.yaw -= dx * 0.006;
     state.pitch = clamp(state.pitch - dy * 0.006, -1.35, 1.35);
   }
 });
-canvas.addEventListener("pointerup", () => { state.dragging = false; state.pointerLook = false; });
+canvas.addEventListener("pointerup", () => {
+  if (document.pointerLockElement !== canvas) {
+    state.dragging = false;
+    state.pointerLook = false;
+  }
+});
 canvas.addEventListener("wheel", (event) => {
   event.preventDefault();
   if (state.player.enabled) return;
   state.distance = clamp(state.distance * (event.deltaY > 0 ? 1.08 : 0.92), 4, 2500);
 }, { passive: false });
+
+document.addEventListener("mousemove", (event) => {
+  if (document.pointerLockElement === canvas && state.player.enabled) {
+    applyPlayerLook(event.movementX || 0, event.movementY || 0);
+  }
+});
+
+document.addEventListener("pointerlockchange", () => {
+  const locked = document.pointerLockElement === canvas;
+  state.dragging = locked;
+  state.pointerLook = locked && state.player.enabled;
+  if (ui.runtimeStatus && state.player.enabled) ui.runtimeStatus.textContent = locked ? "player locked" : "player mode";
+});
+
+function applyPlayerLook(dx, dy) {
+  state.player.yaw -= dx * 0.006;
+  state.player.pitch = clamp(state.player.pitch - dy * 0.006, -1.15, 1.15);
+}
 
 function movementCode(event) {
   if (event.code === "Space" || event.key === " " || event.key === "Spacebar") return "Space";
