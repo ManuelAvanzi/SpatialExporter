@@ -842,6 +842,10 @@ function movePlayerAxis(position, axis, delta) {
 }
 
 function snapPlayerToGround(position) {
+  if (state.player.velocityY > 0) {
+    state.player.grounded = false;
+    return;
+  }
   let bestY = -Infinity;
   const feetY = position[1] - state.player.height * 0.5;
   for (const item of state.runtime?.physics?.colliders || []) {
@@ -1321,15 +1325,21 @@ canvas.addEventListener("wheel", (event) => {
   state.distance = clamp(state.distance * (event.deltaY > 0 ? 1.08 : 0.92), 4, 2500);
 }, { passive: false });
 
+function movementCode(event) {
+  if (event.code === "Space" || event.key === " " || event.key === "Spacebar") return "Space";
+  return event.code;
+}
+
 window.addEventListener("keydown", (event) => {
-  if (["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(event.code)) {
-    if (event.code === "Space" && !state.keys.has("Space")) jumpPlayer();
-    state.keys.add(event.code);
+  const code = movementCode(event);
+  if (["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(code)) {
+    if (code === "Space" && !state.keys.has("Space")) jumpPlayer();
+    state.keys.add(code);
     if (state.player.enabled) event.preventDefault();
   }
 });
 window.addEventListener("keyup", (event) => {
-  state.keys.delete(event.code);
+  state.keys.delete(movementCode(event));
 });
 
 ui.resetView.addEventListener("click", fitCameraFromScene);
